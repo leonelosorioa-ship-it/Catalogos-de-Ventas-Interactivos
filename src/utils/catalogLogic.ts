@@ -52,6 +52,7 @@ export const STORAGE_KEYS = {
   SESSION: 'leps_commerce_session_v1',
   CATALOGS: 'leps_commerce_catalogs_v1',
   ACTIVE_CATALOG_ID: 'leps_commerce_active_catalog_id_v1',
+  CUSTOM_DOMAIN: 'leps_commerce_custom_domain_v1',
 } as const;
 
 export const LEGACY_STORAGE_KEYS = {
@@ -246,7 +247,151 @@ export function sanitizeDomainBase(input: string): string {
     .replace(/\/.*$/, '')
     .replace(/[^a-z0-9.-]/g, '')
     .replace(/^\.+|\.+$/g, '');
-  return cleaned || DEFAULT_DOMAIN_BASE;
+  if (!cleaned || cleaned === 'kr36.link' || cleaned.endsWith('.kr36.link')) {
+    return DEFAULT_DOMAIN_BASE;
+  }
+  return cleaned;
+}
+
+export interface DomainValidationResult {
+  valid: boolean;
+  normalized: string;
+  error: string | null;
+}
+
+/** Valida el formato del subdominio (slug DNS válido de 2 a 63 caracteres) */
+export function validateSubdomainSlug(input: string): DomainValidationResult {
+  const normalized = input.toLowerCase().trim();
+  if (!normalized) {
+    return {
+      valid: false,
+      normalized: '',
+      error: 'Ingresa un subdominio para tu tienda (ej. auren-time).',
+    };
+  }
+  if (normalized.length < 2 || normalized.length > 63) {
+    return {
+      valid: false,
+      normalized,
+      error: 'El subdominio debe tener entre 2 y 63 caracteres.',
+    };
+  }
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      error:
+        'Usa solo letras minúsculas, números y guiones medios (sin espacios ni guiones al inicio o final).',
+    };
+  }
+  return { valid: true, normalized, error: null };
+}
+
+/** Valida el formato de dominio personalizado (ej. leps.link, mitienda.com) y bloquea dependencias externas */
+export function validateCustomDomain(input: string): DomainValidationResult {
+  const trimmed = input.toLowerCase().trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      normalized: '',
+      error: 'Ingresa un dominio personalizado (ej. leps.link o tumarca.com).',
+    };
+  }
+  if (/\s/.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: trimmed,
+      error: 'El dominio no puede contener espacios.',
+    };
+  }
+
+  const withoutProtocol = trimmed.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  if (/[/?#@:]/.test(withoutProtocol)) {
+    return {
+      valid: false,
+      normalized: withoutProtocol,
+      error:
+        'Ingresa únicamente el dominio base (ej. leps.link o tienda.com), sin rutas ni puertos.',
+    };
+  }
+
+  if (withoutProtocol === 'kr36.link' || withoutProtocol.endsWith('.kr36.link')) {
+    return {
+      valid: false,
+      normalized: withoutProtocol,
+      error:
+        'El dominio heredado kr36.link está deshabilitado. Configura tu propio dominio como leps.link.',
+    };
+  }
+
+  if (
+    withoutProtocol.length > 253 ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/.test(withoutProtocol)
+  ) {
+    return {
+      valid: false,
+      normalized: withoutProtocol,
+      error:
+        'Formato de dominio inválido. Usa un dominio con extensión válida (ej. leps.link o mitienda.com.co).',
+    };
+  }
+
+  return { valid: true, normalized: withoutProtocol, error: null };
+}
+
+/** Valida conjuntamente subdominio y dominio personalizado */
+export function validateDomainConfig(
+  subdominio: string,
+  dominioBase: string
+): {
+  valid: boolean;
+  subdominio: string;
+  dominioBase: string;
+  subdomainError: string | null;
+  domainError: string | null;
+} {
+  const subCheck = validateSubdomainSlug(subdominio);
+  const domCheck = validateCustomDomain(dominioBase);
+  return {
+    valid: subCheck.valid && domCheck.valid,
+    subdominio: subCheck.normalized,
+    dominioBase: domCheck.normalized,
+    subdomainError: subCheck.error,
+    domainError: domCheck.error,
+  };
+}
+
+/** Carga el dominio personalizado guardado para la plataforma (fallback a leps.link) */
+export function loadPlatformDomainBase(
+  storage?: Pick<Storage, 'getItem'> | null
+): string {
+  try {
+    const store =
+      storage ?? (typeof window !== 'undefined' ? window.localStorage : null);
+    const raw = store?.getItem(STORAGE_KEYS.CUSTOM_DOMAIN);
+    if (!raw) return DEFAULT_DOMAIN_BASE;
+    const check = validateCustomDomain(raw);
+    return check.valid ? check.normalized : DEFAULT_DOMAIN_BASE;
+  } catch {
+    return DEFAULT_DOMAIN_BASE;
+  }
+}
+
+/** Guarda el dominio personalizado de la plataforma tras validar su formato */
+export function savePlatformDomainBase(
+  domain: string,
+  storage?: Pick<Storage, 'setItem'> | null
+): DomainValidationResult {
+  const check = validateCustomDomain(domain);
+  if (!check.valid) return check;
+  try {
+    const store =
+      storage ?? (typeof window !== 'undefined' ? window.localStorage : null);
+    store?.setItem(STORAGE_KEYS.CUSTOM_DOMAIN, check.normalized);
+  } catch {
+    // ignore storage quota/privacy errors
+  }
+  return check;
 }
 
 /** Formatea la URL pública completa de la tienda según su marca propia */
@@ -337,7 +482,7 @@ export function createCatalogWorkspace(
     input.subdominio?.trim() || cleanName,
     existingCatalogs
   );
-  const dominioBase = sanitizeDomainBase(input.dominioBase || DEFAULT_DOMAIN_BASE);
+  const dominioBase = sanitizeDomainBase(input.dominioBase || loadPlatformDomainBase());
   const id = `cat-${subdominio}-${Date.now().toString(36)}`;
 
   return {

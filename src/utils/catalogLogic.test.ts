@@ -13,12 +13,17 @@ import {
   formatCOP,
   formatStoreUrl,
   isTemplateBioWarning,
+  loadPlatformDomainBase,
   migrateCatalogWorkspace,
   parseBulkCatalogText,
   reorderProducts,
   sanitizeDomainBase,
   sanitizeSubdomain,
+  savePlatformDomainBase,
   validateAuthCredentials,
+  validateCustomDomain,
+  validateDomainConfig,
+  validateSubdomainSlug,
 } from './catalogLogic';
 
 test('formatCOP formats Colombian peso amounts with dots', () => {
@@ -39,6 +44,49 @@ test('sanitizeDomainBase and formatStoreUrl build custom own-brand URLs', () => 
   );
   assert.equal(DEFAULT_STORE_CONFIG.dominioBase, DEFAULT_DOMAIN_BASE);
   assert.equal(DEFAULT_DOMAIN_BASE, 'leps.link');
+});
+
+test('validateSubdomainSlug and validateCustomDomain enforce strict DNS format and block kr36.link', () => {
+  assert.equal(validateSubdomainSlug('auren-time').valid, true);
+  assert.equal(validateSubdomainSlug('a').valid, false);
+  assert.equal(validateSubdomainSlug('-tienda').valid, false);
+  assert.equal(validateSubdomainSlug('mi tienda').valid, false);
+
+  assert.equal(validateCustomDomain('leps.link').valid, true);
+  assert.equal(validateCustomDomain('https://LepsDigital.com/').normalized, 'lepsdigital.com');
+  assert.equal(validateCustomDomain('tienda.mimarca.com.co').valid, true);
+  assert.equal(validateCustomDomain('').valid, false);
+  assert.equal(validateCustomDomain('localhost').valid, false);
+  assert.equal(validateCustomDomain('mi_dominio.com').valid, false);
+  assert.equal(validateCustomDomain('leps.link/ruta').valid, false);
+  assert.equal(validateCustomDomain('kr36.link').valid, false);
+  assert.equal(validateCustomDomain('sub.kr36.link').valid, false);
+
+  const combined = validateDomainConfig('relojes', 'leps.link');
+  assert.equal(combined.valid, true);
+  assert.equal(combined.subdominio, 'relojes');
+  assert.equal(combined.dominioBase, 'leps.link');
+});
+
+test('savePlatformDomainBase and loadPlatformDomainBase persist valid custom domain and reject invalid ones', () => {
+  const memory = new Map<string, string>();
+  const mockStorage = {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, val: string) => {
+      memory.set(key, val);
+    },
+  };
+
+  assert.equal(loadPlatformDomainBase(mockStorage), 'leps.link');
+
+  const badSave = savePlatformDomainBase('kr36.link', mockStorage);
+  assert.equal(badSave.valid, false);
+  assert.equal(loadPlatformDomainBase(mockStorage), 'leps.link');
+
+  const goodSave = savePlatformDomainBase('  MiMarca.COM  ', mockStorage);
+  assert.equal(goodSave.valid, true);
+  assert.equal(goodSave.normalized, 'mimarca.com');
+  assert.equal(loadPlatformDomainBase(mockStorage), 'mimarca.com');
 });
 
 test('calculateDiscountPercent computes anchoring discount correctly', () => {

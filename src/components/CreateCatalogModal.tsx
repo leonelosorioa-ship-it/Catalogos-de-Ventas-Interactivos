@@ -1,14 +1,16 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Store, X } from 'lucide-react';
 import {
   DEFAULT_DOMAIN_BASE,
   sanitizeDomainBase,
   sanitizeSubdomain,
+  validateDomainConfig,
   type StoreTheme,
 } from '../utils/catalogLogic';
 
 interface CreateCatalogModalProps {
   isOpen: boolean;
+  defaultDomainBase?: string;
   onClose: () => void;
   onCreate: (input: {
     nombre: string;
@@ -22,17 +24,25 @@ interface CreateCatalogModalProps {
 
 export function CreateCatalogModal({
   isOpen,
+  defaultDomainBase = DEFAULT_DOMAIN_BASE,
   onClose,
   onCreate,
 }: CreateCatalogModalProps) {
   const [nombre, setNombre] = useState('');
   const [subdominio, setSubdominio] = useState('');
-  const [dominioBase, setDominioBase] = useState(DEFAULT_DOMAIN_BASE);
+  const [dominioBase, setDominioBase] = useState(defaultDomainBase);
   const [subdomainTouched, setSubdomainTouched] = useState(false);
   const [whatsapp, setWhatsapp] = useState('573001234567');
   const [tema, setTema] = useState<StoreTheme>('light');
   const [descripcion, setDescripcion] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDominioBase(defaultDomainBase || DEFAULT_DOMAIN_BASE);
+      setErrorMsg(null);
+    }
+  }, [isOpen, defaultDomainBase]);
 
   if (!isOpen) return null;
 
@@ -52,6 +62,15 @@ export function CreateCatalogModal({
       return;
     }
 
+    const domainCheck = validateDomainConfig(
+      subdominio || sanitizeSubdomain(nombre),
+      dominioBase
+    );
+    if (!domainCheck.valid) {
+      setErrorMsg(domainCheck.subdomainError || domainCheck.domainError);
+      return;
+    }
+
     const digits = whatsapp.replace(/\D/g, '');
     if (digits.length < 7) {
       setErrorMsg('Ingresa un número de WhatsApp válido (mínimo 7 dígitos).');
@@ -60,8 +79,8 @@ export function CreateCatalogModal({
 
     onCreate({
       nombre: nombre.trim(),
-      subdominio: sanitizeSubdomain(subdominio || nombre),
-      dominioBase: sanitizeDomainBase(dominioBase),
+      subdominio: domainCheck.subdominio,
+      dominioBase: domainCheck.dominioBase,
       whatsapp: digits,
       tema,
       descripcion: descripcion.trim(),
@@ -69,7 +88,7 @@ export function CreateCatalogModal({
 
     setNombre('');
     setSubdominio('');
-    setDominioBase(DEFAULT_DOMAIN_BASE);
+    setDominioBase(defaultDomainBase || DEFAULT_DOMAIN_BASE);
     setSubdomainTouched(false);
     setDescripcion('');
     onClose();

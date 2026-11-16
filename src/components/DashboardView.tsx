@@ -1,10 +1,13 @@
-import { useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Check,
+  Copy,
   ExternalLink,
   FolderKanban,
+  Globe,
   GripVertical,
   ImagePlus,
   LayoutGrid,
@@ -28,8 +31,7 @@ import {
   isTemplateBioWarning,
   RECOMMENDED_BIO_EXAMPLE,
   reorderProducts,
-  sanitizeDomainBase,
-  sanitizeSubdomain,
+  validateDomainConfig,
   type CatalogWorkspace,
   type Product,
   type StoreConfig,
@@ -43,6 +45,7 @@ interface DashboardViewProps {
   currentUser: UserAccount;
   catalogs: CatalogWorkspace[];
   activeCatalog: CatalogWorkspace;
+  platformDomain: string;
   onSelectCatalog: (catalogId: string) => void;
   onCreateCatalog: (input: {
     nombre: string;
@@ -54,6 +57,11 @@ interface DashboardViewProps {
   }) => void;
   onDeleteCatalog: (catalogId: string) => void;
   onUpdateConfig: (next: StoreConfig) => void;
+  onSaveCustomDomain: (input: {
+    subdominio: string;
+    dominioBase: string;
+    applyToAllCatalogs: boolean;
+  }) => void;
   onUpdateProducts: (next: Product[]) => void;
   onResetDemo: () => void;
   onOpenCatalog: (catalogId?: string) => void;
@@ -108,10 +116,12 @@ export function DashboardView({
   currentUser,
   catalogs,
   activeCatalog,
+  platformDomain,
   onSelectCatalog,
   onCreateCatalog,
   onDeleteCatalog,
   onUpdateConfig,
+  onSaveCustomDomain,
   onUpdateProducts,
   onResetDemo,
   onOpenCatalog,
@@ -132,6 +142,21 @@ export function DashboardView({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
 
+  // Custom Domain section state
+  const [draftSubdomain, setDraftSubdomain] = useState(storeConfig.subdominio);
+  const [draftDomainBase, setDraftDomainBase] = useState(
+    storeConfig.dominioBase || platformDomain || DEFAULT_DOMAIN_BASE
+  );
+  const [applyDomainToAll, setApplyDomainToAll] = useState(false);
+  const [domainFormError, setDomainFormError] = useState<string | null>(null);
+  const [domainCopied, setDomainCopied] = useState(false);
+
+  useEffect(() => {
+    setDraftSubdomain(storeConfig.subdominio);
+    setDraftDomainBase(storeConfig.dominioBase || platformDomain || DEFAULT_DOMAIN_BASE);
+    setDomainFormError(null);
+  }, [activeCatalog.id, storeConfig.subdominio, storeConfig.dominioBase, platformDomain]);
+
   const showBioWarning = isTemplateBioWarning(storeConfig.descripcion);
   const avgDiscount = getAverageDiscountPercent(products);
   const categories = extractUniqueCategories(products);
@@ -149,6 +174,37 @@ export function DashboardView({
   const triggerFeedback = (msg: string) => {
     setSaveFeedback(msg);
     setTimeout(() => setSaveFeedback(null), 2600);
+  };
+
+  const domainLiveCheck = validateDomainConfig(draftSubdomain, draftDomainBase);
+  const activeFullUrl = formatStoreUrl(storeConfig);
+
+  const handleSaveCustomDomainSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const check = validateDomainConfig(draftSubdomain, draftDomainBase);
+    if (!check.valid) {
+      setDomainFormError(check.subdomainError || check.domainError);
+      return;
+    }
+    setDomainFormError(null);
+    setDraftSubdomain(check.subdominio);
+    setDraftDomainBase(check.dominioBase);
+    onSaveCustomDomain({
+      subdominio: check.subdominio,
+      dominioBase: check.dominioBase,
+      applyToAllCatalogs: applyDomainToAll,
+    });
+    triggerFeedback(`Dominio guardado: ${check.subdominio}.${check.dominioBase}`);
+  };
+
+  const handleCopyPublicUrl = async () => {
+    try {
+      await navigator.clipboard?.writeText(`https://${activeFullUrl}`);
+    } catch {
+      // clipboard API may be restricted in headless contexts
+    }
+    setDomainCopied(true);
+    setTimeout(() => setDomainCopied(false), 2000);
   };
 
   const handleLogoUpload = (e: ChangeEvent<HTMLInputElement>) => {
@@ -618,6 +674,179 @@ export function DashboardView({
                 </button>
               </div>
 
+              {/* Dedicated Custom Domain Configuration Section */}
+              <section
+                id="custom-domain-section"
+                aria-labelledby="custom-domain-heading"
+                className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-cyan-50 border border-cyan-200 text-cyan-700 flex items-center justify-center shrink-0">
+                      <Globe className="w-5 h-5" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h2
+                        id="custom-domain-heading"
+                        className="font-display text-lg font-bold text-slate-900"
+                      >
+                        Dominio Personalizado y Enlace Público
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Configura tu dominio propio (ej. <span className="font-mono">leps.link</span> o{' '}
+                        <span className="font-mono">tumarca.com</span>) con validación de formato y
+                        persistencia independiente.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-mono text-xs bg-slate-100 border border-slate-200 text-slate-800 px-3 py-1.5 rounded-lg">
+                      {activeFullUrl}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyPublicUrl}
+                      className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5"
+                    >
+                      {domainCopied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
+                          <span>Copiado</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>Copiar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                <form onSubmit={handleSaveCustomDomainSubmit} noValidate className="space-y-4">
+                  <div className="grid sm:grid-cols-12 gap-4 items-start">
+                    <div className="sm:col-span-5">
+                      <label
+                        htmlFor="custom-subdomain"
+                        className="block text-xs font-semibold text-slate-700 mb-1.5"
+                      >
+                        Subdominio de la tienda
+                      </label>
+                      <input
+                        id="custom-subdomain"
+                        type="text"
+                        value={draftSubdomain}
+                        onChange={(e) => {
+                          setDraftSubdomain(e.target.value);
+                          if (domainFormError) setDomainFormError(null);
+                        }}
+                        placeholder="ej. relojes"
+                        aria-invalid={Boolean(domainFormError)}
+                        className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-slate-300 text-sm font-mono text-slate-900 focus:outline-none focus:border-cyan-600"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-7">
+                      <label
+                        htmlFor="custom-domain-base"
+                        className="block text-xs font-semibold text-slate-700 mb-1.5"
+                      >
+                        Dominio personalizado (sin https://)
+                      </label>
+                      <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
+                        <span className="px-3 py-2.5 bg-slate-100 border-r border-slate-200 text-xs font-mono text-slate-500 shrink-0">
+                          .
+                        </span>
+                        <input
+                          id="custom-domain-base"
+                          type="text"
+                          value={draftDomainBase}
+                          onChange={(e) => {
+                            setDraftDomainBase(e.target.value);
+                            if (domainFormError) setDomainFormError(null);
+                          }}
+                          placeholder="leps.link"
+                          aria-invalid={Boolean(domainFormError)}
+                          className="flex-1 min-w-0 min-h-[44px] px-3.5 py-2 text-sm font-mono text-slate-900 focus:outline-none"
+                        />
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                        <span>Dominios Leps:</span>
+                        {['leps.link', 'lepsdigital.com'].map((dom) => (
+                          <button
+                            key={dom}
+                            type="button"
+                            onClick={() => {
+                              setDraftDomainBase(dom);
+                              setDomainFormError(null);
+                            }}
+                            className={`font-mono px-2 py-0.5 rounded border transition-colors ${
+                              draftDomainBase.trim().toLowerCase() === dom
+                                ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
+                                : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                            }`}
+                          >
+                            .{dom}
+                          </button>
+                        ))}
+                        <span className="text-slate-400">· Base guardada: .{platformDomain}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {domainFormError && (
+                    <div
+                      role="alert"
+                      className="rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-800 flex items-start gap-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{domainFormError}</span>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="text-xs text-slate-600">
+                      <span>Vista previa del enlace: </span>
+                      <strong className="font-mono text-slate-900">
+                        https://
+                        {domainLiveCheck.subdominio || 'subdominio'}.
+                        {domainLiveCheck.dominioBase || 'leps.link'}
+                      </strong>
+                    </div>
+                    {domainLiveCheck.valid &&
+                      domainLiveCheck.dominioBase !== 'leps.link' &&
+                      domainLiveCheck.dominioBase !== 'lepsdigital.com' && (
+                        <span className="text-[11px] font-mono text-cyan-800">
+                          DNS sugerido: CNAME * → cname.leps.link
+                        </span>
+                      )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                    <label className="flex items-center gap-2.5 text-xs font-medium text-slate-700 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={applyDomainToAll}
+                        onChange={(e) => setApplyDomainToAll(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-600"
+                      />
+                      <span>
+                        Usar este dominio base en todos mis catálogos ({catalogs.length}) y en los
+                        nuevos
+                      </span>
+                    </label>
+
+                    <button
+                      type="submit"
+                      className="min-h-[42px] px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
+                    >
+                      Guardar dominio personalizado
+                    </button>
+                  </div>
+                </form>
+              </section>
+
               <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-6">
                 <div className="grid sm:grid-cols-2 gap-5">
                   <div>
@@ -640,67 +869,6 @@ export function DashboardView({
 
                   <div>
                     <label
-                      htmlFor="store-subdomain"
-                      className="block text-xs font-semibold text-slate-700 mb-1.5"
-                    >
-                      Subdominio y dominio propio
-                    </label>
-                    <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
-                      <input
-                        id="store-subdomain"
-                        type="text"
-                        value={storeConfig.subdominio}
-                        onChange={(e) =>
-                          onUpdateConfig({
-                            ...storeConfig,
-                            subdominio: sanitizeSubdomain(e.target.value),
-                          })
-                        }
-                        aria-label="Subdominio"
-                        className="flex-1 min-w-0 min-h-[44px] px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none"
-                      />
-                      <span className="px-1.5 py-2 bg-slate-100 border-x border-slate-200 text-xs font-mono text-slate-500 shrink-0">
-                        .
-                      </span>
-                      <input
-                        id="store-domain-base"
-                        type="text"
-                        value={storeConfig.dominioBase ?? DEFAULT_DOMAIN_BASE}
-                        onChange={(e) =>
-                          onUpdateConfig({
-                            ...storeConfig,
-                            dominioBase: sanitizeDomainBase(e.target.value),
-                          })
-                        }
-                        aria-label="Dominio base"
-                        placeholder="leps.link"
-                        className="w-32 sm:w-36 min-h-[44px] px-2.5 py-2 bg-slate-50 text-xs font-mono text-slate-800 focus:outline-none"
-                      />
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                      <span>Dominios Leps:</span>
-                      {['leps.link', 'lepsdigital.com'].map((dom) => (
-                        <button
-                          key={dom}
-                          type="button"
-                          onClick={() => {
-                            onUpdateConfig({ ...storeConfig, dominioBase: dom });
-                            triggerFeedback(`Dominio actualizado a .${dom}`);
-                          }}
-                          className={`font-mono px-1.5 py-0.5 rounded border transition-colors ${
-                            (storeConfig.dominioBase ?? DEFAULT_DOMAIN_BASE) === dom
-                              ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
-                              : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                          }`}
-                        >
-                          .{dom}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label
                       htmlFor="store-whatsapp"
                       className="block text-xs font-semibold text-slate-700 mb-1.5"
                     >
@@ -718,8 +886,8 @@ export function DashboardView({
                     />
                   </div>
 
-                  <div className="flex items-end">
-                    <label className="flex items-center gap-3 min-h-[44px] cursor-pointer select-none">
+                  <div className="sm:col-span-2">
+                    <label className="flex items-center gap-3 min-h-[38px] cursor-pointer select-none">
                       <input
                         type="checkbox"
                         checked={storeConfig.isPro}
@@ -1300,6 +1468,7 @@ export function DashboardView({
 
       <CreateCatalogModal
         isOpen={isCreateModalOpen}
+        defaultDomainBase={platformDomain}
         onClose={() => setIsCreateModalOpen(false)}
         onCreate={(input) => {
           onCreateCatalog(input);

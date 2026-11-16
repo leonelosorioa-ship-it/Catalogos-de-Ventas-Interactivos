@@ -13,7 +13,9 @@ import {
   STORAGE_KEYS,
   createCatalogWorkspace,
   formatStoreUrl,
+  loadPlatformDomainBase,
   migrateCatalogWorkspace,
+  savePlatformDomainBase,
   type CartItem,
   type CatalogWorkspace,
   type Product,
@@ -146,6 +148,9 @@ export default function App() {
   const [activeCatalogId, setActiveCatalogId] = useState<string>(() =>
     loadInitialActiveCatalogId(catalogs)
   );
+  const [platformDomain, setPlatformDomain] = useState<string>(() =>
+    loadPlatformDomainBase()
+  );
   const [cart, setCart] = useState<CartItem[]>(loadInitialCart);
 
   const activeCatalog =
@@ -268,6 +273,47 @@ export default function App() {
     );
   };
 
+  const handleSaveCustomDomain = ({
+    subdominio,
+    dominioBase,
+    applyToAllCatalogs,
+  }: {
+    subdominio: string;
+    dominioBase: string;
+    applyToAllCatalogs: boolean;
+  }) => {
+    const saved = savePlatformDomainBase(dominioBase);
+    const nextDomain = saved.valid ? saved.normalized : platformDomain;
+    setPlatformDomain(nextDomain);
+
+    setCatalogs((prev) =>
+      prev.map((c) => {
+        if (c.id === activeCatalog.id) {
+          return {
+            ...c,
+            config: {
+              ...c.config,
+              subdominio,
+              dominioBase: nextDomain,
+            },
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        if (applyToAllCatalogs) {
+          return {
+            ...c,
+            config: {
+              ...c.config,
+              dominioBase: nextDomain,
+            },
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return c;
+      })
+    );
+  };
+
   const handleUpdateProducts = (nextProducts: Product[]) => {
     setCatalogs((prev) =>
       prev.map((c) =>
@@ -284,7 +330,10 @@ export default function App() {
         c.id === activeCatalog.id
           ? {
               ...c,
-              config: DEFAULT_STORE_CONFIG,
+              config: {
+                ...DEFAULT_STORE_CONFIG,
+                dominioBase: platformDomain,
+              },
               products: DEFAULT_PRODUCTS,
               updatedAt: new Date().toISOString(),
             }
@@ -352,10 +401,12 @@ export default function App() {
           currentUser={currentUser}
           catalogs={catalogs}
           activeCatalog={activeCatalog}
+          platformDomain={platformDomain}
           onSelectCatalog={handleSelectCatalog}
           onCreateCatalog={handleCreateCatalog}
           onDeleteCatalog={handleDeleteCatalog}
           onUpdateConfig={handleUpdateConfig}
+          onSaveCustomDomain={handleSaveCustomDomain}
           onUpdateProducts={handleUpdateProducts}
           onResetDemo={handleResetDemo}
           onOpenCatalog={(catalogId) => {
