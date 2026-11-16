@@ -1,0 +1,6 @@
+{
+  "name": "Leps Commerce — Catálogos Conversacionales",
+  "description": "Plataforma SaaS de comercio conversacional por Leps Software Solutions. Catálogos móviles tipo app con precios de anclaje, importación masiva con IA y checkout directo a WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
