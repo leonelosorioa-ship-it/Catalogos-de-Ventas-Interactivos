@@ -9,6 +9,59 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
+const PUBLIC_CATALOGS_FILE = path.join('/tmp', 'leps_public_catalogs_v1.json');
+
+interface StoredCatalogPayload {
+  id: string;
+  config: {
+    subdominio?: string;
+    dominioBase?: string;
+    [key: string]: unknown;
+  };
+  products: unknown[];
+  updatedAt?: string;
+}
+
+function normalizeSlug(input: string): string {
+  return input
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+const publicCatalogRegistry = new Map<string, StoredCatalogPayload>();
+
+function hydrateCatalogRegistry() {
+  try {
+    if (fs.existsSync(PUBLIC_CATALOGS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(PUBLIC_CATALOGS_FILE, 'utf8'));
+      if (Array.isArray(parsed)) {
+        for (const item of parsed as StoredCatalogPayload[]) {
+          const slug = normalizeSlug(item?.config?.subdominio || '');
+          if (slug) publicCatalogRegistry.set(slug, item);
+        }
+      }
+    }
+  } catch {
+    // ignore corrupt cache file
+  }
+}
+
+function persistCatalogRegistry() {
+  try {
+    fs.writeFileSync(
+      PUBLIC_CATALOGS_FILE,
+      JSON.stringify(Array.from(publicCatalogRegistry.values())),
+      'utf8'
+    );
+  } catch {
+    // ignore disk write limits
+  }
+}
+
+hydrateCatalogRegistry();
 
 function createGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -31,6 +84,46 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.post('/api/public/catalogs/sync', (req, res) => {
+    const { catalogs } = req.body as { catalogs?: StoredCatalogPayload[] };
+    if (!Array.isArray(catalogs)) {
+      res.status(400).json({ error: 'Lista de catálogos inválida.' });
+      return;
+    }
+    for (const cat of catalogs.slice(0, 100)) {
+      const slug = normalizeSlug(cat?.config?.subdominio || '');
+      if (slug && cat?.config && Array.isArray(cat?.products)) {
+        publicCatalogRegistry.set(slug, cat);
+      }
+    }
+    persistCatalogRegistry();
+    res.json({ synced: publicCatalogRegistry.size });
+  });
+
+  app.get('/api/public/catalog', (req, res) => {
+    const querySlug =
+      typeof req.query.slug === 'string' ? normalizeSlug(req.query.slug) : '';
+    const forwardedHost =
+      (typeof req.headers['x-forwarded-host'] === 'string'
+        ? req.headers['x-forwarded-host']
+        : req.headers.host) || '';
+    const hostFirstLabel = normalizeSlug(forwardedHost.split(':')[0].split('.')[0] || '');
+    const targetSlug = querySlug || hostFirstLabel;
+
+    if (!targetSlug) {
+      res.status(404).json({ error: 'Catálogo no especificado.' });
+      return;
+    }
+
+    const found = publicCatalogRegistry.get(targetSlug);
+    if (!found) {
+      res.status(404).json({ error: 'Catálogo no encontrado.' });
+      return;
+    }
+
+    res.json({ catalog: found });
   });
 
   app.post('/api/ai/extract-catalog', async (req, res) => {

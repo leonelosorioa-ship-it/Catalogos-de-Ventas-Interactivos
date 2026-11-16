@@ -12,9 +12,11 @@ import {
   LEGACY_STORAGE_KEYS,
   STORAGE_KEYS,
   createCatalogWorkspace,
+  findCatalogBySlug,
   formatStoreUrl,
   loadPlatformDomainBase,
   migrateCatalogWorkspace,
+  resolveRouteTarget,
   savePlatformDomainBase,
   type CartItem,
   type CatalogWorkspace,
@@ -122,41 +124,67 @@ function loadInitialCart(): CartItem[] {
   }
 }
 
-function getInitialViewFromUrl(): ViewMode {
-  if (typeof window === 'undefined') return 'landing';
-  const params = new URLSearchParams(window.location.search);
-  const view = params.get('view');
-  if (
-    view === 'login' ||
-    view === 'dashboard' ||
-    view === 'catalog' ||
-    view === 'landing'
-  ) {
-    return view;
-  }
-  if (params.get('autostart') === '1') {
-    return 'catalog';
-  }
-  return 'landing';
+function getInitialRouteTarget(): { view: ViewMode; catalogSlug: string | null } {
+  if (typeof window === 'undefined') return { view: 'landing', catalogSlug: null };
+  const target = resolveRouteTarget({
+    hostname: window.location.hostname,
+    search: window.location.search,
+    pathname: window.location.pathname,
+  });
+  return {
+    view: target.view || 'landing',
+    catalogSlug: target.catalogSlug,
+  };
 }
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewMode>(getInitialViewFromUrl);
+  const [initialRoute] = useState(getInitialRouteTarget);
+  const [activeView, setActiveView] = useState<ViewMode>(initialRoute.view);
   const [users, setUsers] = useState<UserAccount[]>(loadInitialUsers);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(loadInitialSession);
   const [catalogs, setCatalogs] = useState<CatalogWorkspace[]>(loadInitialCatalogs);
-  const [activeCatalogId, setActiveCatalogId] = useState<string>(() =>
-    loadInitialActiveCatalogId(catalogs)
-  );
+  const [activeCatalogId, setActiveCatalogId] = useState<string>(() => {
+    if (initialRoute.catalogSlug) {
+      const matched = findCatalogBySlug(catalogs, initialRoute.catalogSlug);
+      if (matched) return matched.id;
+    }
+    return loadInitialActiveCatalogId(catalogs);
+  });
+  const [remotePublicCatalog, setRemotePublicCatalog] =
+    useState<CatalogWorkspace | null>(null);
   const [platformDomain, setPlatformDomain] = useState<string>(() =>
     loadPlatformDomainBase()
   );
   const [cart, setCart] = useState<CartItem[]>(loadInitialCart);
 
+  const localMatchedCatalog = initialRoute.catalogSlug
+    ? findCatalogBySlug(catalogs, initialRoute.catalogSlug)
+    : undefined;
+
   const activeCatalog =
+    (activeView === 'catalog' && localMatchedCatalog) ||
+    (activeView === 'catalog' && remotePublicCatalog) ||
     catalogs.find((c) => c.id === activeCatalogId) ||
     catalogs[0] ||
     DEFAULT_CATALOG_WORKSPACE;
+
+  useEffect(() => {
+    if (!initialRoute.catalogSlug || localMatchedCatalog) return;
+    let cancelled = false;
+    fetch(`/api/public/catalog?slug=${encodeURIComponent(initialRoute.catalogSlug)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { catalog?: CatalogWorkspace } | null) => {
+        if (!cancelled && data?.catalog) {
+          setRemotePublicCatalog(migrateCatalogWorkspace(data.catalog));
+        }
+      })
+      .catch(() => {
+        // ignore offline fetch failure
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialRoute.catalogSlug, localMatchedCatalog]);
 
   useEffect(() => {
     try {
@@ -184,6 +212,13 @@ export default function App() {
     } catch {
       // ignore
     }
+    fetch('/api/public/catalogs/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ catalogs }),
+    }).catch(() => {
+      // ignore background sync failure when offline
+    });
   }, [catalogs]);
 
   useEffect(() => {

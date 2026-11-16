@@ -709,3 +709,90 @@ export function buildWhatsAppOrderUrl(
     itemCount,
   };
 }
+
+export interface RouteTarget {
+  view: ViewMode | null;
+  catalogSlug: string | null;
+}
+
+/** Resuelve si la URL actual apunta a un catálogo por subdominio (ej. relojes.aurentime.shop), ruta (/c/relojes) o parámetro (?tienda=relojes) */
+export function resolveRouteTarget(location: {
+  hostname: string;
+  search: string;
+  pathname: string;
+}): RouteTarget {
+  const params = new URLSearchParams(location.search || '');
+  const rawView = params.get('view');
+  const explicitView: ViewMode | null =
+    rawView === 'landing' ||
+    rawView === 'login' ||
+    rawView === 'dashboard' ||
+    rawView === 'catalog'
+      ? rawView
+      : null;
+
+  const rawQuerySlug = params.get('tienda') || params.get('catalog');
+  if (rawQuerySlug && rawQuerySlug.trim()) {
+    return {
+      view: explicitView || 'catalog',
+      catalogSlug: sanitizeSubdomain(rawQuerySlug),
+    };
+  }
+
+  const pathMatch = (location.pathname || '').match(/^\/(?:c|tienda)\/([a-z0-9-]+)/i);
+  if (pathMatch && pathMatch[1]) {
+    return {
+      view: explicitView || 'catalog',
+      catalogSlug: sanitizeSubdomain(pathMatch[1]),
+    };
+  }
+
+  const cleanHost = (location.hostname || '').toLowerCase().split(':')[0];
+  const isPlatformInfraHost =
+    !cleanHost ||
+    cleanHost === 'localhost' ||
+    cleanHost === '127.0.0.1' ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(cleanHost) ||
+    cleanHost.endsWith('.run.app') ||
+    cleanHost.endsWith('.ai.studio') ||
+    cleanHost.endsWith('.web.app') ||
+    cleanHost.endsWith('.firebaseapp.com');
+
+  if (!isPlatformInfraHost) {
+    const parts = cleanHost.split('.').filter(Boolean);
+    if (parts[0] === 'portal' || parts[0] === 'login') {
+      return { view: explicitView || 'login', catalogSlug: null };
+    }
+    const platformHubSubdomains = new Set([
+      'www',
+      'catalogos',
+      'app',
+      'saas',
+      'panel',
+      'admin',
+    ]);
+    if (parts.length >= 3 && !platformHubSubdomains.has(parts[0])) {
+      return {
+        view: explicitView || 'catalog',
+        catalogSlug: sanitizeSubdomain(parts[0]),
+      };
+    }
+  }
+
+  if (params.get('autostart') === '1' && !explicitView) {
+    return { view: 'catalog', catalogSlug: null };
+  }
+
+  return { view: explicitView, catalogSlug: null };
+}
+
+/** Encuentra un catálogo activo comparando su subdominio normalizado */
+export function findCatalogBySlug(
+  catalogs: CatalogWorkspace[],
+  slug: string | null | undefined
+): CatalogWorkspace | undefined {
+  if (!slug || !slug.trim()) return undefined;
+  const clean = sanitizeSubdomain(slug);
+  return catalogs.find((c) => sanitizeSubdomain(c.config.subdominio) === clean);
+}
+

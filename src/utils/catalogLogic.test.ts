@@ -10,6 +10,7 @@ import {
   calculateDiscountPercent,
   createCatalogWorkspace,
   ensureUniqueSubdomain,
+  findCatalogBySlug,
   formatCOP,
   formatStoreUrl,
   isTemplateBioWarning,
@@ -17,6 +18,7 @@ import {
   migrateCatalogWorkspace,
   parseBulkCatalogText,
   reorderProducts,
+  resolveRouteTarget,
   sanitizeDomainBase,
   sanitizeSubdomain,
   savePlatformDomainBase,
@@ -233,5 +235,75 @@ test('isTemplateBioWarning flags unedited placeholder bio without external refer
   assert.equal(
     isTemplateBioWarning('Relojería de alta gama con garantía de 12 meses y envíos nacionales.'),
     false
+  );
+});
+
+test('resolveRouteTarget resolves subdomain hosts, portal host, query params, and paths', () => {
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'relojes.aurentime.shop',
+      search: '',
+      pathname: '/',
+    }),
+    { view: 'catalog', catalogSlug: 'relojes' }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'portal.aurentime.shop',
+      search: '',
+      pathname: '/',
+    }),
+    { view: 'login', catalogSlug: null }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'catalogos.aurentime.shop',
+      search: '',
+      pathname: '/',
+    }),
+    { view: null, catalogSlug: null }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'catalogos.aurentime.shop',
+      search: '?tienda=relojes',
+      pathname: '/',
+    }),
+    { view: 'catalog', catalogSlug: 'relojes' }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'aurentime.shop',
+      search: '',
+      pathname: '/',
+    }),
+    { view: null, catalogSlug: null }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'ais-pre-example.us-east1.run.app',
+      search: '?tienda=relojes',
+      pathname: '/',
+    }),
+    { view: 'catalog', catalogSlug: 'relojes' }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'ais-pre-example.us-east1.run.app',
+      search: '',
+      pathname: '/c/onix-joyeria',
+    }),
+    { view: 'catalog', catalogSlug: 'onix-joyeria' }
+  );
+
+  assert.equal(
+    findCatalogBySlug([DEFAULT_CATALOG_WORKSPACE], 'auren-time')?.id,
+    DEFAULT_CATALOG_WORKSPACE.id
   );
 });
