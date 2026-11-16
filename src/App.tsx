@@ -1,4 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import { auth } from './lib/firebase';
+import {
+  ensureUserProfileInFirestore,
+  fetchPublicCatalogFromFirestore,
+  subscribeUserCatalogsInFirestore,
+  syncCatalogsToFirestore,
+} from './lib/firestoreSync';
 import { AuthLoginView } from './components/AuthLoginView';
 import { CatalogView } from './components/CatalogView';
 import { DashboardView } from './components/DashboardView';
@@ -157,6 +165,15 @@ export default function App() {
   );
   const [cart, setCart] = useState<CartItem[]>(loadInitialCart);
 
+  // Store Firebase Auth user & ID token strictly in memory (never in localStorage)
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [firebaseIdToken, setFirebaseIdToken] = useState<string | null>(null);
+  const [fatalFirestoreError, setFatalFirestoreError] = useState<Error | null>(null);
+  const skipNextCloudSaveRef = useRef(false);
+  const skipNextFirestoreSaveRef = useRef(false);
+  const firestoreSeedAttemptedRef = useRef<string | null>(null);
+
   const localMatchedCatalog = initialRoute.catalogSlug
     ? findCatalogBySlug(catalogs, initialRoute.catalogSlug)
     : undefined;
@@ -168,19 +185,163 @@ export default function App() {
     catalogs[0] ||
     DEFAULT_CATALOG_WORKSPACE;
 
+  const syncWithCloudAccount = async (
+    token: string,
+    seedCatalogs?: CatalogWorkspace[],
+    seedDomain?: string
+  ) => {
+    try {
+      const res = await fetch('/api/catalogs', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        user?: { uid: string; email: string; name: string; platformDomain?: string };
+        catalogs?: CatalogWorkspace[];
+      };
+
+      if (data.user?.platformDomain) {
+        const savedDom = savePlatformDomainBase(data.user.platformDomain);
+        if (savedDom.valid) setPlatformDomain(savedDom.normalized);
+      }
+
+      if (Array.isArray(data.catalogs) && data.catalogs.length > 0) {
+        const cloudCatalogs = data.catalogs.map(migrateCatalogWorkspace);
+        skipNextCloudSaveRef.current = true;
+        setCatalogs(cloudCatalogs);
+        setActiveCatalogId((prev) =>
+          cloudCatalogs.some((c) => c.id === prev) ? prev : cloudCatalogs[0].id
+        );
+      } else if (seedCatalogs && seedCatalogs.length > 0) {
+        const putRes = await fetch('/api/catalogs', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            catalogs: seedCatalogs,
+            platformDomain: seedDomain || platformDomain,
+          }),
+        });
+        if (putRes.ok) {
+          const putData = (await putRes.json()) as { catalogs?: CatalogWorkspace[] };
+          if (Array.isArray(putData.catalogs) && putData.catalogs.length > 0) {
+            skipNextCloudSaveRef.current = true;
+            setCatalogs(putData.catalogs.map(migrateCatalogWorkspace));
+            setActiveCatalogId(putData.catalogs[0].id);
+          }
+        }
+      }
+    } catch {
+      // Keep local workspace intact if cloud endpoint is temporarily unreachable
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      setIsAuthReady(true);
+      setFirebaseUser(fbUser);
+      if (!fbUser) {
+        setFirebaseIdToken(null);
+        firestoreSeedAttemptedRef.current = null;
+        return;
+      }
+      try {
+        const token = await fbUser.getIdToken();
+        setFirebaseIdToken(token);
+        setCurrentUser({
+          id: fbUser.uid,
+          name:
+            fbUser.displayName || fbUser.email?.split('@')[0] || 'Administrador',
+          email: fbUser.email || '',
+          password: '',
+          createdAt: new Date().toISOString(),
+        });
+        await syncWithCloudAccount(token, catalogs, platformDomain);
+        if (fbUser.emailVerified) {
+          const fsDomain = await ensureUserProfileInFirestore(fbUser, platformDomain);
+          if (fsDomain) {
+            const savedDom = savePlatformDomainBase(fsDomain);
+            if (savedDom.valid) setPlatformDomain(savedDom.normalized);
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('"operationType"')) {
+          setFatalFirestoreError(err);
+        } else {
+          setFirebaseIdToken(null);
+        }
+      }
+    });
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Only attach onSnapshot listeners if auth is ready and user is authenticated
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !firebaseUser.emailVerified) {
+      return;
+    }
+
+    const unsubscribe = subscribeUserCatalogsInFirestore(
+      firebaseUser,
+      firebaseUser.email || '',
+      (fsCatalogs) => {
+        if (fsCatalogs.length > 0) {
+          skipNextFirestoreSaveRef.current = true;
+          setCatalogs(fsCatalogs);
+          setActiveCatalogId((prev) =>
+            fsCatalogs.some((c) => c.id === prev) ? prev : fsCatalogs[0].id
+          );
+        } else if (
+          firestoreSeedAttemptedRef.current !== firebaseUser.uid &&
+          catalogs.length > 0
+        ) {
+          firestoreSeedAttemptedRef.current = firebaseUser.uid;
+          void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain).catch(
+            (err) => {
+              if (err instanceof Error) setFatalFirestoreError(err);
+            }
+          );
+        }
+      }
+    );
+
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthReady, firebaseUser?.uid, firebaseUser?.emailVerified]);
+
   useEffect(() => {
     if (!initialRoute.catalogSlug || localMatchedCatalog) return;
     let cancelled = false;
-    fetch(`/api/public/catalog?slug=${encodeURIComponent(initialRoute.catalogSlug)}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { catalog?: CatalogWorkspace } | null) => {
-        if (!cancelled && data?.catalog) {
-          setRemotePublicCatalog(migrateCatalogWorkspace(data.catalog));
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/public/catalog?slug=${encodeURIComponent(initialRoute.catalogSlug!)}`
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { catalog?: CatalogWorkspace };
+          if (!cancelled && data?.catalog) {
+            setRemotePublicCatalog(migrateCatalogWorkspace(data.catalog));
+            return;
+          }
         }
-      })
-      .catch(() => {
-        // ignore offline fetch failure
-      });
+      } catch {
+        // Fallback to Firestore public catalog lookup below
+      }
+
+      try {
+        const fsCatalog = await fetchPublicCatalogFromFirestore(
+          initialRoute.catalogSlug!
+        );
+        if (!cancelled && fsCatalog) {
+          setRemotePublicCatalog(fsCatalog);
+        }
+      } catch {
+        // Keep default catalog fallback if slug is not published in Firestore yet
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -219,7 +380,36 @@ export default function App() {
     }).catch(() => {
       // ignore background sync failure when offline
     });
-  }, [catalogs]);
+
+    if (firebaseIdToken) {
+      if (skipNextCloudSaveRef.current) {
+        skipNextCloudSaveRef.current = false;
+      } else {
+        fetch('/api/catalogs', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${firebaseIdToken}`,
+          },
+          body: JSON.stringify({ catalogs, platformDomain }),
+        }).catch(() => {
+          // ignore transient network failure
+        });
+      }
+    }
+
+    if (firebaseUser && firebaseUser.emailVerified) {
+      if (skipNextFirestoreSaveRef.current) {
+        skipNextFirestoreSaveRef.current = false;
+      } else {
+        void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain).catch(
+          (err) => {
+            if (err instanceof Error) setFatalFirestoreError(err);
+          }
+        );
+      }
+    }
+  }, [catalogs, firebaseIdToken, firebaseUser, platformDomain]);
 
   useEffect(() => {
     try {
@@ -252,6 +442,30 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
+  const handleGoogleLoginSuccess = async ({
+    uid,
+    email,
+    name,
+    idToken,
+  }: {
+    uid: string;
+    email: string;
+    name: string;
+    idToken: string;
+  }) => {
+    setFirebaseIdToken(idToken);
+    setCurrentUser({
+      id: uid,
+      name,
+      email,
+      password: '',
+      createdAt: new Date().toISOString(),
+    });
+    await syncWithCloudAccount(idToken, catalogs, platformDomain);
+    setActiveView('dashboard');
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
   const handleRegisterSuccess = (newUser: UserAccount) => {
     setUsers((prev) => [...prev, newUser]);
     setCurrentUser(newUser);
@@ -260,6 +474,8 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    setFirebaseIdToken(null);
+    signOut(auth).catch(() => {});
     setCurrentUser(null);
     setActiveView('login');
   };
@@ -408,6 +624,10 @@ export default function App() {
     setCart([]);
   };
 
+  if (fatalFirestoreError) {
+    throw fatalFirestoreError;
+  }
+
   const effectiveView: ViewMode =
     activeView === 'dashboard' && !currentUser ? 'login' : activeView;
 
@@ -426,6 +646,7 @@ export default function App() {
         <AuthLoginView
           users={users}
           onLoginSuccess={handleLoginSuccess}
+          onGoogleLoginSuccess={handleGoogleLoginSuccess}
           onRegisterSuccess={handleRegisterSuccess}
           onBackToLanding={() => handleNavigate('landing')}
         />

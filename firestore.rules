@@ -1,0 +1,424 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================
+    // Global Hardened Primitives
+    // =========================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string &&
+        id.size() >= 1 &&
+        id.size() <= 128 &&
+        id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidSlugId(id) {
+      return id is string &&
+        id.size() >= 2 &&
+        id.size() <= 63 &&
+        id.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$');
+    }
+
+    function isValidDomainBase(domain) {
+      return domain is string &&
+        domain.size() >= 3 &&
+        domain.size() <= 253 &&
+        domain.matches('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,24}$');
+    }
+
+    function isNumeric(val) {
+      return val is int || val is float;
+    }
+
+    // =========================================================
+    // Validation Blueprints (Synchronized with firebase-blueprint.json)
+    // =========================================================
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'name',
+          'platformDomain',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'email',
+          'name',
+          'platformDomain',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.uid == request.auth.uid &&
+        data.email is string &&
+        data.email.size() >= 3 &&
+        data.email.size() <= 254 &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 120 &&
+        isValidDomainBase(data.platformDomain) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCatalog(data, catalogId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'nombre',
+          'subdominio',
+          'dominioBase',
+          'descripcion',
+          'whatsapp',
+          'tema',
+          'isPro',
+          'isPublic',
+          'logoUrl',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'nombre',
+          'subdominio',
+          'dominioBase',
+          'descripcion',
+          'whatsapp',
+          'tema',
+          'isPro',
+          'isPublic',
+          'logoUrl',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        data.id == catalogId &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == request.auth.uid &&
+        data.nombre is string &&
+        data.nombre.size() >= 1 &&
+        data.nombre.size() <= 120 &&
+        isValidSlugId(data.subdominio) &&
+        isValidDomainBase(data.dominioBase) &&
+        data.descripcion is string &&
+        data.descripcion.size() <= 1000 &&
+        data.whatsapp is string &&
+        data.whatsapp.size() >= 7 &&
+        data.whatsapp.size() <= 20 &&
+        data.whatsapp.matches('^[0-9]{7,20}$') &&
+        data.tema is string &&
+        data.tema.size() >= 4 &&
+        data.tema.size() <= 6 &&
+        data.tema in ['light', 'dark', 'galaxy'] &&
+        data.isPro is bool &&
+        data.isPublic is bool &&
+        data.logoUrl is string &&
+        data.logoUrl.size() <= 2048 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCatalogProduct(data, catalogId) {
+      return data.keys().hasAll([
+          'id',
+          'catalogId',
+          'ownerUid',
+          'isPublic',
+          'sortOrder',
+          'categoria',
+          'nombre',
+          'precioActual',
+          'precioAnterior',
+          'descripcion',
+          'imagen',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'catalogId',
+          'ownerUid',
+          'isPublic',
+          'sortOrder',
+          'categoria',
+          'nombre',
+          'precioActual',
+          'precioAnterior',
+          'descripcion',
+          'imagen',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isNumeric(data.id) &&
+        data.id >= 1 &&
+        isValidId(data.catalogId) &&
+        data.catalogId == catalogId &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == request.auth.uid &&
+        data.isPublic is bool &&
+        isNumeric(data.sortOrder) &&
+        data.sortOrder >= 0 &&
+        data.sortOrder <= 10000 &&
+        data.categoria is string &&
+        data.categoria.size() >= 1 &&
+        data.categoria.size() <= 60 &&
+        data.nombre is string &&
+        data.nombre.size() >= 1 &&
+        data.nombre.size() <= 140 &&
+        isNumeric(data.precioActual) &&
+        data.precioActual >= 1 &&
+        data.precioActual <= 1000000000 &&
+        isNumeric(data.precioAnterior) &&
+        data.precioAnterior >= 0 &&
+        data.precioAnterior <= 1000000000 &&
+        data.descripcion is string &&
+        data.descripcion.size() <= 600 &&
+        data.imagen is string &&
+        data.imagen.size() <= 2048 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSlugLookup(data, slugId) {
+      return data.keys().hasAll([
+          'slug',
+          'catalogId',
+          'ownerUid',
+          'isPublic',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'slug',
+          'catalogId',
+          'ownerUid',
+          'isPublic',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidSlugId(data.slug) &&
+        data.slug == slugId &&
+        isValidId(data.catalogId) &&
+        isValidId(data.ownerUid) &&
+        data.ownerUid == request.auth.uid &&
+        data.isPublic is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================
+    // Collection Rules
+    // =========================================================
+
+    // 1. User Profiles (Strict PII Isolation - Owner Only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'platformDomain', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['platformDomain', 'updatedAt'])
+        );
+
+      allow delete: if false;
+    }
+
+    // 2. Storefront Catalogs (Zero PII)
+    match /catalogs/{catalogId} {
+      allow get: if isValidId(catalogId) && (
+        resource == null ||
+        existing().isPublic == true ||
+        (isSignedIn() && existing().ownerUid == request.auth.uid)
+      );
+
+      allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(catalogId) &&
+        isValidCatalog(incoming(), catalogId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(catalogId) &&
+        existing().ownerUid == request.auth.uid &&
+        isValidCatalog(incoming(), catalogId) &&
+        incoming().id == existing().id &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action: Update store branding & theme
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'nombre',
+            'descripcion',
+            'whatsapp',
+            'tema',
+            'isPro',
+            'isPublic',
+            'logoUrl',
+            'updatedAt'
+          ]) ||
+          // Action: Update custom subdomain/domain
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'subdominio',
+            'dominioBase',
+            'updatedAt'
+          ]) ||
+          // Action: Full catalog sync
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'nombre',
+            'subdominio',
+            'dominioBase',
+            'descripcion',
+            'whatsapp',
+            'tema',
+            'isPro',
+            'isPublic',
+            'logoUrl',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(catalogId) &&
+        existing().ownerUid == request.auth.uid;
+
+      // 3. Catalog Products Subcollection (Master Gate on Parent Catalog)
+      match /products/{productId} {
+        allow get: if isValidId(catalogId) &&
+          isValidId(productId) &&
+          (
+            resource == null ||
+            existing().isPublic == true ||
+            (isSignedIn() && existing().ownerUid == request.auth.uid)
+          );
+
+        allow list: if existing().isPublic == true ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid);
+
+        allow create: if isVerifiedUser() &&
+          isValidId(catalogId) &&
+          isValidId(productId) &&
+          isValidCatalogProduct(incoming(), catalogId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid &&
+          incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.isPublic;
+
+        allow update: if isVerifiedUser() &&
+          isValidId(catalogId) &&
+          isValidId(productId) &&
+          existing().ownerUid == request.auth.uid &&
+          isValidCatalogProduct(incoming(), catalogId) &&
+          incoming().id == existing().id &&
+          incoming().catalogId == existing().catalogId &&
+          incoming().ownerUid == existing().ownerUid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid &&
+          incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.isPublic &&
+          (
+            // Action: Drag & Drop reorder
+            incoming().diff(existing()).affectedKeys().hasOnly(['sortOrder', 'updatedAt']) ||
+            // Action: Edit product fields
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'nombre',
+              'categoria',
+              'precioActual',
+              'precioAnterior',
+              'descripcion',
+              'imagen',
+              'sortOrder',
+              'isPublic',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(catalogId) &&
+          isValidId(productId) &&
+          existing().ownerUid == request.auth.uid &&
+          get(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid;
+      }
+    }
+
+    // 4. Public Subdomain Lookup Index (Zero PII, Atomic Catalog Binding)
+    match /slugs/{slugId} {
+      allow get: if isValidSlugId(slugId) && (
+        resource == null ||
+        existing().isPublic == true ||
+        (isSignedIn() && existing().ownerUid == request.auth.uid)
+      );
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidSlugId(slugId) &&
+        isValidSlugLookup(incoming(), slugId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid &&
+        incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.isPublic;
+
+      allow update: if isVerifiedUser() &&
+        isValidSlugId(slugId) &&
+        existing().ownerUid == request.auth.uid &&
+        isValidSlugLookup(incoming(), slugId) &&
+        incoming().slug == existing().slug &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid &&
+        incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.isPublic &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['catalogId', 'isPublic', 'updatedAt']);
+
+      allow delete: if isVerifiedUser() &&
+        isValidSlugId(slugId) &&
+        existing().ownerUid == request.auth.uid;
+    }
+  }
+}

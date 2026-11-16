@@ -4,6 +4,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
+import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
+import { getOrCreateUser, updateUserPlatformDomain } from './src/db/users.ts';
+import {
+  getPublicCatalogBySlug,
+  getUserCatalogs,
+  replaceUserCatalogs,
+} from './src/db/catalogs.ts';
+import type { CatalogWorkspace } from './src/utils/catalogLogic.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -86,6 +94,73 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  app.get('/api/catalogs', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const uid = req.user?.uid;
+      const email = req.user?.email || '';
+      if (!uid) {
+        res.status(401).json({ error: 'Sesión inválida.' });
+        return;
+      }
+
+      const dbUser = await getOrCreateUser(uid, email, req.user?.name);
+      const userCatalogs = await getUserCatalogs(dbUser.id);
+
+      res.json({
+        user: {
+          uid: dbUser.uid,
+          email: dbUser.email,
+          name: dbUser.name,
+          platformDomain: dbUser.platformDomain,
+        },
+        catalogs: userCatalogs,
+      });
+    } catch (error) {
+      console.error('Failed to fetch authenticated catalogs:', error);
+      res.status(500).json({ error: 'No se pudieron cargar tus catálogos.' });
+    }
+  });
+
+  app.put('/api/catalogs', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const uid = req.user?.uid;
+      const email = req.user?.email || '';
+      if (!uid) {
+        res.status(401).json({ error: 'Sesión inválida.' });
+        return;
+      }
+
+      const { catalogs, platformDomain } = req.body as {
+        catalogs?: CatalogWorkspace[];
+        platformDomain?: string;
+      };
+      if (!Array.isArray(catalogs)) {
+        res.status(400).json({ error: 'Lista de catálogos inválida.' });
+        return;
+      }
+
+      const dbUser = await getOrCreateUser(uid, email, req.user?.name);
+      if (typeof platformDomain === 'string' && platformDomain.trim()) {
+        await updateUserPlatformDomain(dbUser.uid, platformDomain.trim().toLowerCase());
+      }
+
+      const saved = await replaceUserCatalogs(dbUser.id, dbUser.email, catalogs);
+
+      for (const cat of saved) {
+        const slug = normalizeSlug(cat.config.subdominio || '');
+        if (slug) {
+          publicCatalogRegistry.set(slug, cat as unknown as StoredCatalogPayload);
+        }
+      }
+      persistCatalogRegistry();
+
+      res.json({ catalogs: saved });
+    } catch (error) {
+      console.error('Failed to save authenticated catalogs:', error);
+      res.status(500).json({ error: 'No se pudieron guardar tus cambios.' });
+    }
+  });
+
   app.post('/api/public/catalogs/sync', (req, res) => {
     const { catalogs } = req.body as { catalogs?: StoredCatalogPayload[] };
     if (!Array.isArray(catalogs)) {
@@ -102,7 +177,7 @@ async function startServer() {
     res.json({ synced: publicCatalogRegistry.size });
   });
 
-  app.get('/api/public/catalog', (req, res) => {
+  app.get('/api/public/catalog', async (req, res) => {
     const querySlug =
       typeof req.query.slug === 'string' ? normalizeSlug(req.query.slug) : '';
     const forwardedHost =
@@ -115,6 +190,16 @@ async function startServer() {
     if (!targetSlug) {
       res.status(404).json({ error: 'Catálogo no especificado.' });
       return;
+    }
+
+    try {
+      const sqlCatalog = await getPublicCatalogBySlug(targetSlug);
+      if (sqlCatalog) {
+        res.json({ catalog: sqlCatalog });
+        return;
+      }
+    } catch {
+      // Fallback gracefully to in-memory/tmp cache when SQL is unavailable locally
     }
 
     const found = publicCatalogRegistry.get(targetSlug);

@@ -1,0 +1,322 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private merchant profile and custom domain configuration isolated to the owning user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the merchant."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Verified merchant email address (PII)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Display name of the merchant or store."
+        },
+        "platformDomain": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,24}$",
+          "description": "Primary custom domain configured by the merchant."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "name",
+        "platformDomain",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Catalog": {
+      "title": "Catalog",
+      "description": "Storefront catalog workspace configuration without user PII.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Catalog identifier matching the document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the catalog owner."
+        },
+        "nombre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Commercial name of the store."
+        },
+        "subdominio": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "description": "Unique DNS subdomain slug for the store."
+        },
+        "dominioBase": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,24}$",
+          "description": "Base domain for the storefront URL."
+        },
+        "descripcion": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1000,
+          "description": "Store bio shown on the storefront."
+        },
+        "whatsapp": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 20,
+          "pattern": "^[0-9]{7,20}$",
+          "description": "Business WhatsApp checkout phone number (digits only)."
+        },
+        "tema": {
+          "type": "string",
+          "enum": ["light", "dark", "galaxy"],
+          "minLength": 4,
+          "maxLength": 6,
+          "description": "Storefront visual theme preset."
+        },
+        "isPro": {
+          "type": "boolean",
+          "description": "Whether the store displays the PRO badge."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether the catalog is publicly viewable via storefront link."
+        },
+        "logoUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048,
+          "description": "External or asset URL of the store logo."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the catalog was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the catalog was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "nombre",
+        "subdominio",
+        "dominioBase",
+        "descripcion",
+        "whatsapp",
+        "tema",
+        "isPro",
+        "isPublic",
+        "logoUrl",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CatalogProduct": {
+      "title": "CatalogProduct",
+      "description": "Ordered inventory item belonging to a parent Catalog document.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number",
+          "description": "Numeric product identifier within the catalog."
+        },
+        "catalogId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent catalog document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the parent catalog owner."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Mirrors parent catalog visibility for query-level enforcement without parent get()."
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Zero-based display order updated via Drag & Drop."
+        },
+        "categoria": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Product category label."
+        },
+        "nombre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140,
+          "description": "Product display title."
+        },
+        "precioActual": {
+          "type": "number",
+          "description": "Current selling price."
+        },
+        "precioAnterior": {
+          "type": "number",
+          "description": "Strike-through anchor price."
+        },
+        "descripcion": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 600,
+          "description": "Short commercial description."
+        },
+        "imagen": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048,
+          "description": "Product image URL or preset asset path."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the product was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the product was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "catalogId",
+        "ownerUid",
+        "isPublic",
+        "sortOrder",
+        "categoria",
+        "nombre",
+        "precioActual",
+        "precioAnterior",
+        "descripcion",
+        "imagen",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CatalogSlugLookup": {
+      "title": "CatalogSlugLookup",
+      "description": "Atomic subdomain lookup index mapping public slugs to catalog IDs without exposing user PII.",
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "description": "Normalized subdomain slug matching document ID."
+        },
+        "catalogId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Target catalog document ID."
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the owning merchant."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "Whether the target storefront is publicly accessible."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the slug mapping was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the slug mapping was updated."
+        }
+      },
+      "required": [
+        "slug",
+        "catalogId",
+        "ownerUid",
+        "isPublic",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Private user profiles containing merchant email and custom domain settings."
+    },
+    "/catalogs/{catalogId}": {
+      "schema": {
+        "$ref": "#/entities/Catalog"
+      },
+      "description": "Storefront catalog workspaces owned by verified merchants."
+    },
+    "/catalogs/{catalogId}/products/{productId}": {
+      "schema": {
+        "$ref": "#/entities/CatalogProduct"
+      },
+      "description": "Subcollection of ordered products inside a catalog."
+    },
+    "/slugs/{slugId}": {
+      "schema": {
+        "$ref": "#/entities/CatalogSlugLookup"
+      },
+      "description": "Public subdomain-to-catalog resolution index."
+    }
+  }
+}
