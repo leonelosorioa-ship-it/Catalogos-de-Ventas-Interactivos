@@ -47,7 +47,7 @@ const CONTROL_CENTER_FEATURES = [
   {
     icon: Globe,
     title: 'URLs personalizadas',
-    detail: 'Asigna tu subdominio o dominio propio tipo tumarca.leps.link al instante.',
+    detail: 'Asigna tu subdominio o dominio propio tipo tutienda.aurentime.shop al instante.',
   },
   {
     icon: BarChart3,
@@ -153,7 +153,7 @@ export function AuthLoginView({
           </button>
 
           <span className="font-mono text-xs text-cyan-400">
-            portal.leps.link
+            portal.aurentime.shop
           </span>
         </div>
 

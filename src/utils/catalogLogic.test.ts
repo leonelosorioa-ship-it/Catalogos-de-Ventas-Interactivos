@@ -40,10 +40,10 @@ test('sanitizeDomainBase and formatStoreUrl build custom own-brand URLs', () => 
   );
   assert.equal(
     formatStoreUrl({ subdominio: 'Auren Time' }),
-    'auren-time.leps.link'
+    'auren-time.aurentime.shop'
   );
   assert.equal(DEFAULT_STORE_CONFIG.dominioBase, DEFAULT_DOMAIN_BASE);
-  assert.equal(DEFAULT_DOMAIN_BASE, 'leps.link');
+  assert.equal(DEFAULT_DOMAIN_BASE, 'aurentime.shop');
 });
 
 test('validateSubdomainSlug and validateCustomDomain enforce strict DNS format and block kr36.link', () => {
@@ -52,20 +52,20 @@ test('validateSubdomainSlug and validateCustomDomain enforce strict DNS format a
   assert.equal(validateSubdomainSlug('-tienda').valid, false);
   assert.equal(validateSubdomainSlug('mi tienda').valid, false);
 
-  assert.equal(validateCustomDomain('leps.link').valid, true);
+  assert.equal(validateCustomDomain('aurentime.shop').valid, true);
   assert.equal(validateCustomDomain('https://LepsDigital.com/').normalized, 'lepsdigital.com');
   assert.equal(validateCustomDomain('tienda.mimarca.com.co').valid, true);
   assert.equal(validateCustomDomain('').valid, false);
   assert.equal(validateCustomDomain('localhost').valid, false);
   assert.equal(validateCustomDomain('mi_dominio.com').valid, false);
-  assert.equal(validateCustomDomain('leps.link/ruta').valid, false);
+  assert.equal(validateCustomDomain('aurentime.shop/ruta').valid, false);
   assert.equal(validateCustomDomain('kr36.link').valid, false);
   assert.equal(validateCustomDomain('sub.kr36.link').valid, false);
 
-  const combined = validateDomainConfig('relojes', 'leps.link');
+  const combined = validateDomainConfig('relojes', 'aurentime.shop');
   assert.equal(combined.valid, true);
   assert.equal(combined.subdominio, 'relojes');
-  assert.equal(combined.dominioBase, 'leps.link');
+  assert.equal(combined.dominioBase, 'aurentime.shop');
 });
 
 test('savePlatformDomainBase and loadPlatformDomainBase persist valid custom domain and reject invalid ones', () => {
@@ -77,11 +77,14 @@ test('savePlatformDomainBase and loadPlatformDomainBase persist valid custom dom
     },
   };
 
-  assert.equal(loadPlatformDomainBase(mockStorage), 'leps.link');
+  assert.equal(loadPlatformDomainBase(mockStorage), 'aurentime.shop');
 
   const badSave = savePlatformDomainBase('kr36.link', mockStorage);
   assert.equal(badSave.valid, false);
-  assert.equal(loadPlatformDomainBase(mockStorage), 'leps.link');
+  assert.equal(loadPlatformDomainBase(mockStorage), 'aurentime.shop');
+
+  savePlatformDomainBase('leps.link', mockStorage);
+  assert.equal(loadPlatformDomainBase(mockStorage), 'aurentime.shop');
 
   const goodSave = savePlatformDomainBase('  MiMarca.COM  ', mockStorage);
   assert.equal(goodSave.valid, true);
@@ -119,7 +122,7 @@ test('validateAuthCredentials enforces email, password length, and registration 
   assert.equal(validateAuthCredentials('user@leps.co', '123456', 'register', 'Auren'), null);
 });
 
-test('createCatalogWorkspace creates distinct catalog with clean leps.link subdomain', () => {
+test('createCatalogWorkspace creates distinct catalog with clean aurentime.shop subdomain', () => {
   const created = createCatalogWorkspace(
     'agencialeps@gmail.com',
     {
@@ -132,13 +135,13 @@ test('createCatalogWorkspace creates distinct catalog with clean leps.link subdo
 
   assert.equal(created.config.nombre, 'Auren Time');
   assert.equal(created.config.subdominio, 'auren-time-2');
-  assert.equal(created.config.dominioBase, 'leps.link');
+  assert.equal(created.config.dominioBase, 'aurentime.shop');
   assert.equal(created.config.whatsapp, '573105550000');
   assert.equal(created.config.tema, 'galaxy');
   assert.equal(created.products.length, 0);
 });
 
-test('migrateCatalogWorkspace replaces legacy external domains and copy with leps.link', () => {
+test('migrateCatalogWorkspace replaces prior platform domains with aurentime.shop', () => {
   const legacyCatalog = {
     ...DEFAULT_CATALOG_WORKSPACE,
     config: {
@@ -148,9 +151,18 @@ test('migrateCatalogWorkspace replaces legacy external domains and copy with lep
     },
   };
   const migrated = migrateCatalogWorkspace(legacyCatalog);
-  assert.equal(migrated.config.dominioBase, 'leps.link');
+  assert.equal(migrated.config.dominioBase, 'aurentime.shop');
   assert.equal(migrated.config.descripcion.toLowerCase().includes('redes de kr'), false);
-  assert.equal(formatStoreUrl(migrated.config), 'auren-time.leps.link');
+  assert.equal(formatStoreUrl(migrated.config), 'auren-time.aurentime.shop');
+
+  const priorDefaultCatalog = {
+    ...DEFAULT_CATALOG_WORKSPACE,
+    config: {
+      ...DEFAULT_STORE_CONFIG,
+      dominioBase: 'leps.link',
+    },
+  };
+  assert.equal(migrateCatalogWorkspace(priorDefaultCatalog).config.dominioBase, 'aurentime.shop');
 
   const customCatalog = {
     ...DEFAULT_CATALOG_WORKSPACE,

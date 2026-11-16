@@ -168,14 +168,14 @@ export function CreateCatalogModal({
                 value={dominioBase}
                 onChange={(e) => setDominioBase(sanitizeDomainBase(e.target.value))}
                 aria-label="Dominio propio"
-                placeholder="leps.link"
-                className="w-32 min-h-[44px] px-2.5 py-2 bg-slate-50 text-xs font-mono text-slate-800 focus:outline-none"
+                placeholder="aurentime.shop"
+                className="w-36 min-h-[44px] px-2.5 py-2 bg-slate-50 text-xs font-mono text-slate-800 focus:outline-none"
               />
             </div>
             <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
               <div className="flex items-center gap-1.5">
                 <span>Dominio:</span>
-                {['leps.link', 'lepsdigital.com'].map((dom) => (
+                {['aurentime.shop', 'lepsdigital.com'].map((dom) => (
                   <button
                     key={dom}
                     type="button"

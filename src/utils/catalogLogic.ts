@@ -86,7 +86,7 @@ export const DEFAULT_DEMO_USER: UserAccount = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-export const DEFAULT_DOMAIN_BASE = 'leps.link';
+export const DEFAULT_DOMAIN_BASE = 'aurentime.shop';
 
 export const DEFAULT_STORE_CONFIG: StoreConfig = {
   nombre: 'Auren Time',
@@ -238,7 +238,7 @@ export function sanitizeSubdomain(input: string): string {
   return cleaned || 'mi-tienda';
 }
 
-/** Normaliza el dominio base para marca propia (ej: leps.link, mitienda.com) */
+/** Normaliza el dominio base para marca propia (ej: aurentime.shop, mitienda.com) */
 export function sanitizeDomainBase(input: string): string {
   const cleaned = input
     .toLowerCase()
@@ -287,14 +287,14 @@ export function validateSubdomainSlug(input: string): DomainValidationResult {
   return { valid: true, normalized, error: null };
 }
 
-/** Valida el formato de dominio personalizado (ej. leps.link, mitienda.com) y bloquea dependencias externas */
+/** Valida el formato de dominio personalizado (ej. aurentime.shop, mitienda.com) y bloquea dependencias externas */
 export function validateCustomDomain(input: string): DomainValidationResult {
   const trimmed = input.toLowerCase().trim();
   if (!trimmed) {
     return {
       valid: false,
       normalized: '',
-      error: 'Ingresa un dominio personalizado (ej. leps.link o tumarca.com).',
+      error: 'Ingresa un dominio personalizado (ej. aurentime.shop o tumarca.com).',
     };
   }
   if (/\s/.test(trimmed)) {
@@ -311,7 +311,7 @@ export function validateCustomDomain(input: string): DomainValidationResult {
       valid: false,
       normalized: withoutProtocol,
       error:
-        'Ingresa únicamente el dominio base (ej. leps.link o tienda.com), sin rutas ni puertos.',
+        'Ingresa únicamente el dominio base (ej. aurentime.shop o tienda.com), sin rutas ni puertos.',
     };
   }
 
@@ -320,7 +320,7 @@ export function validateCustomDomain(input: string): DomainValidationResult {
       valid: false,
       normalized: withoutProtocol,
       error:
-        'El dominio heredado kr36.link está deshabilitado. Configura tu propio dominio como leps.link.',
+        'El dominio heredado kr36.link está deshabilitado. Configura tu propio dominio como aurentime.shop.',
     };
   }
 
@@ -332,7 +332,7 @@ export function validateCustomDomain(input: string): DomainValidationResult {
       valid: false,
       normalized: withoutProtocol,
       error:
-        'Formato de dominio inválido. Usa un dominio con extensión válida (ej. leps.link o mitienda.com.co).',
+        'Formato de dominio inválido. Usa un dominio con extensión válida (ej. aurentime.shop o mitienda.com.co).',
     };
   }
 
@@ -361,7 +361,7 @@ export function validateDomainConfig(
   };
 }
 
-/** Carga el dominio personalizado guardado para la plataforma (fallback a leps.link) */
+/** Carga el dominio personalizado guardado para la plataforma (fallback a aurentime.shop) */
 export function loadPlatformDomainBase(
   storage?: Pick<Storage, 'getItem'> | null
 ): string {
@@ -371,7 +371,10 @@ export function loadPlatformDomainBase(
     const raw = store?.getItem(STORAGE_KEYS.CUSTOM_DOMAIN);
     if (!raw) return DEFAULT_DOMAIN_BASE;
     const check = validateCustomDomain(raw);
-    return check.valid ? check.normalized : DEFAULT_DOMAIN_BASE;
+    if (!check.valid || check.normalized === 'leps.link') {
+      return DEFAULT_DOMAIN_BASE;
+    }
+    return check.normalized;
   } catch {
     return DEFAULT_DOMAIN_BASE;
   }
@@ -400,14 +403,18 @@ export function formatStoreUrl(
 ): string {
   const sub = sanitizeSubdomain(config.subdominio || 'mi-tienda');
   const rawBase = sanitizeDomainBase(config.dominioBase || DEFAULT_DOMAIN_BASE);
-  const base = rawBase === 'kr36.link' ? DEFAULT_DOMAIN_BASE : rawBase;
+  const base =
+    rawBase === 'kr36.link' || rawBase === 'leps.link' ? DEFAULT_DOMAIN_BASE : rawBase;
   return `${sub}.${base}`;
 }
 
-/** Migra catálogos guardados previamente con dominio externo hacia leps.link */
+/** Migra catálogos guardados previamente hacia el dominio oficial aurentime.shop */
 export function migrateCatalogWorkspace(catalog: CatalogWorkspace): CatalogWorkspace {
   const rawDomain = sanitizeDomainBase(catalog.config?.dominioBase || DEFAULT_DOMAIN_BASE);
-  const nextDomain = rawDomain === 'kr36.link' ? DEFAULT_DOMAIN_BASE : rawDomain;
+  const nextDomain =
+    rawDomain === 'kr36.link' || rawDomain === 'leps.link'
+      ? DEFAULT_DOMAIN_BASE
+      : rawDomain;
   const rawBio = catalog.config?.descripcion || '';
   const hasOldExternalBio = rawBio.toLowerCase().includes('redes de kr');
   return {

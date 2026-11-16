@@ -296,7 +296,7 @@ export function LandingView({
                   Tu negocio bajo tu propio enlace profesional
                 </h3>
                 <p className="text-sm text-slate-300 leading-relaxed max-w-lg">
-                  Configura tu subdominio o dominio propio (<span className="font-mono text-white">tumarca.leps.link</span>),
+                  Configura tu subdominio o dominio propio (<span className="font-mono text-white">tutienda.aurentime.shop</span>),
                   logotipo y plantilla visual (Minimalista Claro, Oscuro o Galaxia) en segundos.
                 </p>
               </div>
@@ -475,7 +475,7 @@ export function LandingView({
             />
             <span>Leps Software Solutions · División Tecnológica de Leps Digital</span>
           </div>
-          <span>Plataforma de Comercio Conversacional · 2026</span>
+          <span>aurentime.shop · Comercio Conversacional · 2026</span>
         </div>
       </footer>
     </div>

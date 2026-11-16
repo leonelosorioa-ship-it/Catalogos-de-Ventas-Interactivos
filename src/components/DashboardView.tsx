@@ -693,8 +693,8 @@ export function DashboardView({
                         Dominio Personalizado y Enlace Público
                       </h2>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        Configura tu dominio propio (ej. <span className="font-mono">leps.link</span> o{' '}
-                        <span className="font-mono">tumarca.com</span>) con validación de formato y
+                        Configura tu dominio oficial (<span className="font-mono">aurentime.shop</span>{' '}
+                        o <span className="font-mono">tumarca.com</span>) con validación de formato y
                         persistencia independiente.
                       </p>
                     </div>
@@ -766,14 +766,14 @@ export function DashboardView({
                             setDraftDomainBase(e.target.value);
                             if (domainFormError) setDomainFormError(null);
                           }}
-                          placeholder="leps.link"
+                          placeholder="aurentime.shop"
                           aria-invalid={Boolean(domainFormError)}
                           className="flex-1 min-w-0 min-h-[44px] px-3.5 py-2 text-sm font-mono text-slate-900 focus:outline-none"
                         />
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                        <span>Dominios Leps:</span>
-                        {['leps.link', 'lepsdigital.com'].map((dom) => (
+                        <span>Dominios disponibles:</span>
+                        {['aurentime.shop', 'lepsdigital.com'].map((dom) => (
                           <button
                             key={dom}
                             type="button"
@@ -811,14 +811,14 @@ export function DashboardView({
                       <strong className="font-mono text-slate-900">
                         https://
                         {domainLiveCheck.subdominio || 'subdominio'}.
-                        {domainLiveCheck.dominioBase || 'leps.link'}
+                        {domainLiveCheck.dominioBase || 'aurentime.shop'}
                       </strong>
                     </div>
                     {domainLiveCheck.valid &&
-                      domainLiveCheck.dominioBase !== 'leps.link' &&
+                      domainLiveCheck.dominioBase !== 'aurentime.shop' &&
                       domainLiveCheck.dominioBase !== 'lepsdigital.com' && (
                         <span className="text-[11px] font-mono text-cyan-800">
-                          DNS sugerido: CNAME * → cname.leps.link
+                          DNS sugerido: CNAME * → cname.aurentime.shop
                         </span>
                       )}
                   </div>
