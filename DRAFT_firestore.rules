@@ -127,6 +127,10 @@ service cloud.firestore {
           'isPro',
           'isPublic',
           'logoUrl',
+          'cardStyle',
+          'bannerText',
+          'ctaText',
+          'showDiscountBadges',
           'createdAt',
           'updatedAt'
         ]) &&
@@ -147,12 +151,16 @@ service cloud.firestore {
         data.whatsapp.matches('^[0-9]{7,20}$') &&
         data.tema is string &&
         data.tema.size() >= 4 &&
-        data.tema.size() <= 6 &&
-        data.tema in ['light', 'dark', 'galaxy'] &&
+        data.tema.size() <= 10 &&
+        data.tema in ['light', 'dark', 'galaxy', 'rosegold', 'emerald', 'sunset'] &&
         data.isPro is bool &&
         data.isPublic is bool &&
         data.logoUrl is string &&
         data.logoUrl.size() <= 180000 &&
+        (!('cardStyle' in data) || (data.cardStyle is string && data.cardStyle.size() >= 7 && data.cardStyle.size() <= 9 && data.cardStyle in ['classic', 'editorial', 'compact'])) &&
+        (!('bannerText' in data) || (data.bannerText is string && data.bannerText.size() <= 160)) &&
+        (!('ctaText' in data) || (data.ctaText is string && data.ctaText.size() <= 40)) &&
+        (!('showDiscountBadges' in data) || data.showDiscountBadges is bool) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -310,7 +318,7 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
-          // Action: Update store branding & theme
+          // Action: Update store branding, design, & theme
           incoming().diff(existing()).affectedKeys().hasOnly([
             'nombre',
             'descripcion',
@@ -319,6 +327,10 @@ service cloud.firestore {
             'isPro',
             'isPublic',
             'logoUrl',
+            'cardStyle',
+            'bannerText',
+            'ctaText',
+            'showDiscountBadges',
             'updatedAt'
           ]) ||
           // Action: Update custom subdomain/domain
@@ -327,6 +339,11 @@ service cloud.firestore {
             'dominioBase',
             'updatedAt'
           ]) ||
+          // Action: Admin suspend / reactivate storefront
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'isPublic',
+            'updatedAt'
+          ])) ||
           // Action: Full catalog sync
           incoming().diff(existing()).affectedKeys().hasOnly([
             'nombre',
@@ -338,6 +355,10 @@ service cloud.firestore {
             'isPro',
             'isPublic',
             'logoUrl',
+            'cardStyle',
+            'bannerText',
+            'ctaText',
+            'showDiscountBadges',
             'updatedAt'
           ])
         );
@@ -368,8 +389,8 @@ service cloud.firestore {
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
           (
-            getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid ||
-            isAdmin()
+            isAdmin() ||
+            getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid
           );
 
         allow update: if isVerifiedUser() &&
@@ -383,8 +404,8 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
           (
-            getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid ||
-            isAdmin()
+            isAdmin() ||
+            getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid
           ) &&
           (
             // Action: Drag & Drop reorder
@@ -408,8 +429,8 @@ service cloud.firestore {
           isValidId(productId) &&
           (existing().ownerUid == request.auth.uid || isAdmin()) &&
           (
-            get(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid ||
-            isAdmin()
+            isAdmin() ||
+            get(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid
           );
       }
     }
@@ -430,8 +451,8 @@ service cloud.firestore {
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
         (
-          getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid ||
-          isAdmin()
+          isAdmin() ||
+          getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid
         );
 
       allow update: if isVerifiedUser() &&
@@ -443,8 +464,8 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         (
-          getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid ||
-          isAdmin()
+          isAdmin() ||
+          getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid
         ) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['catalogId', 'isPublic', 'updatedAt']);
 

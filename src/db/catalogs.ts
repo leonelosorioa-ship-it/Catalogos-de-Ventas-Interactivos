@@ -13,7 +13,16 @@ function normalizeSlug(input: string): string {
 }
 
 function normalizeTheme(raw: string): StoreTheme {
-  if (raw === 'dark' || raw === 'galaxy' || raw === 'light') return raw;
+  if (
+    raw === 'dark' ||
+    raw === 'galaxy' ||
+    raw === 'light' ||
+    raw === 'rosegold' ||
+    raw === 'emerald' ||
+    raw === 'sunset'
+  ) {
+    return raw;
+  }
   return 'light';
 }
 

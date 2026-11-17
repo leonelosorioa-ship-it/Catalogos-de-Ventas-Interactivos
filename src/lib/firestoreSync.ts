@@ -179,7 +179,15 @@ export function subscribeUserCatalogsInFirestore(
                 whatsapp: String(data.whatsapp || '573001234567'),
                 tema: (data.tema as StoreTheme) || 'light',
                 isPro: Boolean(data.isPro),
+                isPublic: data.isPublic !== false,
                 logoUrl: String(data.logoUrl || ''),
+                cardStyle:
+                  data.cardStyle === 'editorial' || data.cardStyle === 'compact'
+                    ? data.cardStyle
+                    : 'classic',
+                bannerText: String(data.bannerText || ''),
+                ctaText: String(data.ctaText || ''),
+                showDiscountBadges: data.showDiscountBadges !== false,
               },
               products,
               updatedAt: toIsoString(data.updatedAt),
@@ -358,6 +366,10 @@ export async function syncCatalogsToFirestore(
         isPro: cleanCat.isPro,
         isPublic: cleanCat.isPublic,
         logoUrl: cleanCat.logoUrl,
+        cardStyle: cleanCat.cardStyle,
+        bannerText: cleanCat.bannerText,
+        ctaText: cleanCat.ctaText,
+        showDiscountBadges: cleanCat.showDiscountBadges,
         updatedAt: serverTimestamp(),
       });
 
@@ -507,6 +519,26 @@ export async function fetchPublicCatalogFromFirestore(
     if (!slugSnap.exists()) return null;
 
     const slugData = slugSnap.data();
+    if (slugData.isPublic === false) {
+      return migrateCatalogWorkspace({
+        id: String(slugData.catalogId || `suspended-${cleanSlug}`),
+        ownerEmail: '',
+        config: {
+          nombre: 'Tienda Suspendida',
+          subdominio: cleanSlug,
+          dominioBase: DEFAULT_DOMAIN_BASE,
+          descripcion: '',
+          whatsapp: '573001234567',
+          tema: 'light',
+          isPro: false,
+          isPublic: false,
+          logoUrl: '',
+        },
+        products: [],
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     const catalogId = typeof slugData.catalogId === 'string' ? slugData.catalogId : '';
     if (!catalogId) return null;
 
@@ -514,6 +546,26 @@ export async function fetchPublicCatalogFromFirestore(
     if (!catSnap.exists()) return null;
 
     const data = catSnap.data();
+    if (data.isPublic === false) {
+      return migrateCatalogWorkspace({
+        id: catSnap.id,
+        ownerEmail: '',
+        config: {
+          nombre: String(data.nombre || 'Tienda Suspendida'),
+          subdominio: String(data.subdominio || cleanSlug),
+          dominioBase: String(data.dominioBase || DEFAULT_DOMAIN_BASE),
+          descripcion: '',
+          whatsapp: '573001234567',
+          tema: (data.tema as StoreTheme) || 'light',
+          isPro: Boolean(data.isPro),
+          isPublic: false,
+          logoUrl: String(data.logoUrl || ''),
+        },
+        products: [],
+        updatedAt: toIsoString(data.updatedAt),
+      });
+    }
+
     const products = await fetchProductsForCatalog(catalogId);
 
     return migrateCatalogWorkspace({
@@ -527,12 +579,41 @@ export async function fetchPublicCatalogFromFirestore(
         whatsapp: String(data.whatsapp || '573001234567'),
         tema: (data.tema as StoreTheme) || 'light',
         isPro: Boolean(data.isPro),
+        isPublic: data.isPublic !== false,
         logoUrl: String(data.logoUrl || ''),
+        cardStyle:
+          data.cardStyle === 'editorial' || data.cardStyle === 'compact'
+            ? data.cardStyle
+            : 'classic',
+        bannerText: String(data.bannerText || ''),
+        ctaText: String(data.ctaText || ''),
+        showDiscountBadges: data.showDiscountBadges !== false,
       },
       products,
       updatedAt: toIsoString(data.updatedAt),
     });
   } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    const msg = error instanceof Error ? error.message.toLowerCase() : '';
+    if (code === 'permission-denied' || msg.includes('permission') || msg.includes('insufficient permissions')) {
+      return migrateCatalogWorkspace({
+        id: `suspended-${cleanSlug}`,
+        ownerEmail: '',
+        config: {
+          nombre: 'Catálogo No Disponible',
+          subdominio: cleanSlug,
+          dominioBase: DEFAULT_DOMAIN_BASE,
+          descripcion: '',
+          whatsapp: '573001234567',
+          tema: 'light',
+          isPro: false,
+          isPublic: false,
+          logoUrl: '',
+        },
+        products: [],
+        updatedAt: new Date().toISOString(),
+      });
+    }
     handleFirestoreError(error, OperationType.GET, `slugs/${cleanSlug}`);
   }
 }
@@ -605,7 +686,15 @@ export function subscribeAllCatalogsAdminInFirestore(
                 whatsapp: String(data.whatsapp || '573001234567'),
                 tema: (data.tema as StoreTheme) || 'light',
                 isPro: Boolean(data.isPro),
+                isPublic: data.isPublic !== false,
                 logoUrl: String(data.logoUrl || ''),
+                cardStyle:
+                  data.cardStyle === 'editorial' || data.cardStyle === 'compact'
+                    ? data.cardStyle
+                    : 'classic',
+                bannerText: String(data.bannerText || ''),
+                ctaText: String(data.ctaText || ''),
+                showDiscountBadges: data.showDiscountBadges !== false,
               },
               products,
               updatedAt: toIsoString(data.updatedAt),
@@ -688,6 +777,10 @@ export async function adminSaveCatalogInFirestore(
         isPro: cleanCat.isPro,
         isPublic: cleanCat.isPublic,
         logoUrl: cleanCat.logoUrl,
+        cardStyle: cleanCat.cardStyle,
+        bannerText: cleanCat.bannerText,
+        ctaText: cleanCat.ctaText,
+        showDiscountBadges: cleanCat.showDiscountBadges,
         updatedAt: serverTimestamp(),
       });
       if (prevSlug && prevSlug !== cleanCat.subdominio) {
@@ -780,33 +873,108 @@ export async function adminSaveCatalogInFirestore(
   }
 }
 
-export async function adminDeleteCatalogInFirestore(
+export async function adminSetCatalogPublicStatusInFirestore(
   fbUser: User,
-  catalogId: string
+  catalogId: string,
+  subdominio: string,
+  isPublic: boolean
 ): Promise<void> {
   if (!isVerifiedAdminFirebaseUser(fbUser)) return;
   const cleanId = sanitizeIdForFirestore(catalogId);
+  const cleanSlug = sanitizeSlugForFirestore(subdominio);
   try {
+    const batch = writeBatch(db);
     const catRef = doc(db, 'catalogs', cleanId);
     const catSnap = await getDoc(catRef);
+    if (catSnap.exists()) {
+      batch.update(catRef, {
+        isPublic,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (cleanSlug) {
+      const slugRef = doc(db, 'slugs', cleanSlug);
+      const slugSnap = await getDoc(slugRef);
+      if (slugSnap.exists()) {
+        batch.update(slugRef, {
+          catalogId: cleanId,
+          isPublic,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+    await batch.commit();
+
     const prodsSnap = await getDocs(collection(db, 'catalogs', cleanId, 'products'));
     for (let i = 0; i < prodsSnap.docs.length; i += MAX_PRODUCTS_PER_BATCH) {
-      const delBatch = writeBatch(db);
-      for (const p of prodsSnap.docs.slice(i, i + MAX_PRODUCTS_PER_BATCH)) {
-        delBatch.delete(p.ref);
+      const prodBatch = writeBatch(db);
+      for (const pDoc of prodsSnap.docs.slice(i, i + MAX_PRODUCTS_PER_BATCH)) {
+        prodBatch.update(pDoc.ref, {
+          isPublic,
+          updatedAt: serverTimestamp(),
+        });
       }
-      await delBatch.commit();
+      await prodBatch.commit();
     }
-    if (catSnap.exists()) {
-      const slug = sanitizeSlugForFirestore(String(catSnap.data().subdominio || ''));
-      if (slug) {
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `catalogs/${cleanId}`);
+  }
+}
+
+export async function adminDeleteCatalogInFirestore(
+  fbUser: User,
+  catalogId: string,
+  fallbackSlug?: string
+): Promise<void> {
+  if (!isVerifiedAdminFirebaseUser(fbUser)) return;
+  const cleanId = sanitizeIdForFirestore(catalogId);
+  const cleanFallbackSlug = fallbackSlug ? sanitizeSlugForFirestore(fallbackSlug) : '';
+
+  try {
+    const targetIds = new Set<string>([cleanId]);
+    if (cleanFallbackSlug) {
+      const slugMatches = await getDocs(
+        query(collection(db, 'catalogs'), where('subdominio', '==', cleanFallbackSlug))
+      );
+      for (const m of slugMatches.docs) {
+        targetIds.add(m.id);
+      }
+    }
+
+    const slugsToClean = new Set<string>();
+    if (cleanFallbackSlug) slugsToClean.add(cleanFallbackSlug);
+
+    for (const targetId of targetIds) {
+      const catRef = doc(db, 'catalogs', targetId);
+      const catSnap = await getDoc(catRef);
+      const prodsSnap = await getDocs(collection(db, 'catalogs', targetId, 'products'));
+      for (let i = 0; i < prodsSnap.docs.length; i += MAX_PRODUCTS_PER_BATCH) {
+        const delBatch = writeBatch(db);
+        for (const p of prodsSnap.docs.slice(i, i + MAX_PRODUCTS_PER_BATCH)) {
+          delBatch.delete(p.ref);
+        }
+        await delBatch.commit();
+      }
+      if (catSnap.exists()) {
+        const docSlug = sanitizeSlugForFirestore(String(catSnap.data().subdominio || ''));
+        if (docSlug) slugsToClean.add(docSlug);
+        await deleteDoc(catRef);
+      }
+    }
+
+    for (const slug of slugsToClean) {
+      try {
         const slugRef = doc(db, 'slugs', slug);
         const slugSnap = await getDoc(slugRef);
-        if (slugSnap.exists() && slugSnap.data().catalogId === cleanId) {
+        if (
+          slugSnap.exists() &&
+          (!slugSnap.data().catalogId || targetIds.has(String(slugSnap.data().catalogId)))
+        ) {
           await deleteDoc(slugRef);
         }
+      } catch {
+        // ignore already deleted or unrelated slug
       }
-      await deleteDoc(catRef);
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `catalogs/${cleanId}`);

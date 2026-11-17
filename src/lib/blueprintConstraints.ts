@@ -59,7 +59,21 @@ export const BLUEPRINT_LIMITS = {
     whatsappMin: getProp('Catalog', 'whatsapp').minLength ?? 7,
     whatsappMax: getProp('Catalog', 'whatsapp').maxLength ?? 20,
     whatsappPattern: new RegExp(getProp('Catalog', 'whatsapp').pattern ?? '^[0-9]{7,20}$'),
-    temas: (getProp('Catalog', 'tema').enum ?? ['light', 'dark', 'galaxy']) as StoreTheme[],
+    temas: (getProp('Catalog', 'tema').enum ?? [
+      'light',
+      'dark',
+      'galaxy',
+      'rosegold',
+      'emerald',
+      'sunset',
+    ]) as StoreTheme[],
+    cardStyles: (getProp('Catalog', 'cardStyle').enum ?? [
+      'classic',
+      'editorial',
+      'compact',
+    ]) as Array<'classic' | 'editorial' | 'compact'>,
+    bannerTextMax: getProp('Catalog', 'bannerText').maxLength ?? 160,
+    ctaTextMax: getProp('Catalog', 'ctaText').maxLength ?? 40,
     logoUrlMax: getProp('Catalog', 'logoUrl').maxLength ?? 2048,
   },
   product: {
@@ -161,6 +175,20 @@ export function sanitizeCatalogForFirestore(catalog: CatalogWorkspace, ownerUid:
     catalog.config.logoUrl,
     BLUEPRINT_LIMITS.catalog.logoUrlMax
   );
+  const rawCardStyle = catalog.config.cardStyle;
+  const cardStyle =
+    rawCardStyle && BLUEPRINT_LIMITS.catalog.cardStyles.includes(rawCardStyle)
+      ? rawCardStyle
+      : 'classic';
+  const bannerText = truncateString(
+    catalog.config.bannerText || '',
+    BLUEPRINT_LIMITS.catalog.bannerTextMax
+  );
+  const ctaText = truncateString(
+    catalog.config.ctaText || '',
+    BLUEPRINT_LIMITS.catalog.ctaTextMax
+  );
+  const showDiscountBadges = catalog.config.showDiscountBadges !== false;
 
   return {
     id,
@@ -172,8 +200,12 @@ export function sanitizeCatalogForFirestore(catalog: CatalogWorkspace, ownerUid:
     whatsapp,
     tema,
     isPro: Boolean(catalog.config.isPro),
-    isPublic: true,
+    isPublic: catalog.config.isPublic !== false,
     logoUrl,
+    cardStyle,
+    bannerText,
+    ctaText,
+    showDiscountBadges,
   };
 }
 

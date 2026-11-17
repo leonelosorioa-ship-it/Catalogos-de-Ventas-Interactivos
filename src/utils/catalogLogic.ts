@@ -1,6 +1,65 @@
 export type ViewMode = 'landing' | 'login' | 'dashboard' | 'catalog';
 
-export type StoreTheme = 'light' | 'dark' | 'galaxy';
+export type StoreTheme =
+  | 'light'
+  | 'dark'
+  | 'galaxy'
+  | 'rosegold'
+  | 'emerald'
+  | 'sunset';
+
+export type StoreCardStyle = 'classic' | 'editorial' | 'compact';
+
+export const ALL_STORE_THEMES: readonly StoreTheme[] = [
+  'light',
+  'dark',
+  'galaxy',
+  'rosegold',
+  'emerald',
+  'sunset',
+] as const;
+
+export const STORE_THEME_META: Record<
+  StoreTheme,
+  { name: string; desc: string; badge: string; swatchClass: string }
+> = {
+  light: {
+    name: 'Minimalista Claro',
+    desc: 'Fondo marfil limpio y alto contraste editorial.',
+    badge: 'Clásico',
+    swatchClass: 'bg-slate-50 border-slate-300 text-slate-900',
+  },
+  dark: {
+    name: 'Minimalista Oscuro',
+    desc: 'Superficie obsidiana con acentos dorados.',
+    badge: 'Lujo',
+    swatchClass: 'bg-zinc-950 border-zinc-700 text-amber-400',
+  },
+  galaxy: {
+    name: 'Galaxia Tech',
+    desc: 'Índigo profundo con reflejos cian tecnológicos.',
+    badge: 'Moderno',
+    swatchClass: 'bg-[#080B1E] border-cyan-500/40 text-cyan-300',
+  },
+  rosegold: {
+    name: 'Boutique Oro Rosa',
+    desc: 'Crema cálido con acentos champán y oro rosa editorial.',
+    badge: 'Nuevo',
+    swatchClass: 'bg-[#FAF4F0] border-[#D9A79C] text-[#6B2D26]',
+  },
+  emerald: {
+    name: 'Esmeralda Ejecutivo',
+    desc: 'Verde bosque profundo con acentos esmeralda y oro.',
+    badge: 'Nuevo',
+    swatchClass: 'bg-[#061813] border-emerald-500/45 text-emerald-300',
+  },
+  sunset: {
+    name: 'Terracota Urbano',
+    desc: 'Carbón cálido con acentos coral y ámbar vibrante.',
+    badge: 'Nuevo',
+    swatchClass: 'bg-[#171112] border-orange-500/45 text-orange-300',
+  },
+};
 
 export interface Product {
   id: number;
@@ -20,7 +79,12 @@ export interface StoreConfig {
   whatsapp: string;
   tema: StoreTheme;
   isPro: boolean;
+  isPublic?: boolean;
   logoUrl: string;
+  cardStyle?: StoreCardStyle;
+  bannerText?: string;
+  ctaText?: string;
+  showDiscountBadges?: boolean;
 }
 
 export interface CartItem {
@@ -72,6 +136,7 @@ export const STORAGE_KEYS = {
   CATALOGS: 'leps_commerce_catalogs_v1',
   ACTIVE_CATALOG_ID: 'leps_commerce_active_catalog_id_v1',
   CUSTOM_DOMAIN: 'leps_commerce_custom_domain_v1',
+  PLATFORM_DESIGN: 'leps_commerce_platform_design_v1',
 } as const;
 
 export const LEGACY_STORAGE_KEYS = {
@@ -117,7 +182,12 @@ export const DEFAULT_STORE_CONFIG: StoreConfig = {
   whatsapp: '573001234567',
   tema: 'light',
   isPro: true,
+  isPublic: true,
   logoUrl: '',
+  cardStyle: 'classic',
+  bannerText: '',
+  ctaText: '',
+  showDiscountBadges: true,
 };
 
 export const DEFAULT_PRODUCTS: Product[] = [
@@ -468,6 +538,89 @@ export function formatDirectStoreDisplay(
   return `catalogos.${base}/${sub}`;
 }
 
+export interface PlatformDesignDefaults {
+  defaultTheme: StoreTheme;
+  defaultCardStyle: StoreCardStyle;
+  defaultBannerText: string;
+  defaultCtaText: string;
+  defaultShowDiscountBadges: boolean;
+  defaultIsPro: boolean;
+}
+
+export const DEFAULT_PLATFORM_DESIGN: PlatformDesignDefaults = {
+  defaultTheme: 'light',
+  defaultCardStyle: 'classic',
+  defaultBannerText: '',
+  defaultCtaText: '',
+  defaultShowDiscountBadges: true,
+  defaultIsPro: true,
+};
+
+export function normalizeStoreTheme(raw: unknown): StoreTheme {
+  if (
+    typeof raw === 'string' &&
+    (ALL_STORE_THEMES as readonly string[]).includes(raw)
+  ) {
+    return raw as StoreTheme;
+  }
+  return 'light';
+}
+
+export function normalizeCardStyle(raw: unknown): StoreCardStyle {
+  if (raw === 'editorial' || raw === 'compact' || raw === 'classic') return raw;
+  return 'classic';
+}
+
+export function loadPlatformDesignDefaults(
+  storage?: Pick<Storage, 'getItem'> | null
+): PlatformDesignDefaults {
+  try {
+    const store =
+      storage ?? (typeof window !== 'undefined' ? window.localStorage : null);
+    const raw = store?.getItem(STORAGE_KEYS.PLATFORM_DESIGN);
+    if (!raw) return DEFAULT_PLATFORM_DESIGN;
+    const parsed = JSON.parse(raw) as Partial<PlatformDesignDefaults>;
+    return {
+      defaultTheme: normalizeStoreTheme(parsed.defaultTheme),
+      defaultCardStyle: normalizeCardStyle(parsed.defaultCardStyle),
+      defaultBannerText:
+        typeof parsed.defaultBannerText === 'string'
+          ? parsed.defaultBannerText.slice(0, 160)
+          : '',
+      defaultCtaText:
+        typeof parsed.defaultCtaText === 'string'
+          ? parsed.defaultCtaText.slice(0, 40)
+          : '',
+      defaultShowDiscountBadges: parsed.defaultShowDiscountBadges !== false,
+      defaultIsPro: parsed.defaultIsPro !== false,
+    };
+  } catch {
+    return DEFAULT_PLATFORM_DESIGN;
+  }
+}
+
+export function savePlatformDesignDefaults(
+  next: PlatformDesignDefaults,
+  storage?: Pick<Storage, 'setItem'> | null
+): PlatformDesignDefaults {
+  const sanitized: PlatformDesignDefaults = {
+    defaultTheme: normalizeStoreTheme(next.defaultTheme),
+    defaultCardStyle: normalizeCardStyle(next.defaultCardStyle),
+    defaultBannerText: (next.defaultBannerText || '').trim().slice(0, 160),
+    defaultCtaText: (next.defaultCtaText || '').trim().slice(0, 40),
+    defaultShowDiscountBadges: next.defaultShowDiscountBadges !== false,
+    defaultIsPro: next.defaultIsPro !== false,
+  };
+  try {
+    const store =
+      storage ?? (typeof window !== 'undefined' ? window.localStorage : null);
+    store?.setItem(STORAGE_KEYS.PLATFORM_DESIGN, JSON.stringify(sanitized));
+  } catch {
+    // ignore
+  }
+  return sanitized;
+}
+
 /** Migra catálogos guardados previamente hacia el dominio oficial aurentime.shop */
 export function migrateCatalogWorkspace(catalog: CatalogWorkspace): CatalogWorkspace {
   const rawDomain = sanitizeDomainBase(catalog.config?.dominioBase || DEFAULT_DOMAIN_BASE);
@@ -482,6 +635,12 @@ export function migrateCatalogWorkspace(catalog: CatalogWorkspace): CatalogWorks
     config: {
       ...DEFAULT_STORE_CONFIG,
       ...catalog.config,
+      tema: normalizeStoreTheme(catalog.config?.tema),
+      cardStyle: normalizeCardStyle(catalog.config?.cardStyle),
+      isPublic: catalog.config?.isPublic !== false,
+      showDiscountBadges: catalog.config?.showDiscountBadges !== false,
+      bannerText: typeof catalog.config?.bannerText === 'string' ? catalog.config.bannerText : '',
+      ctaText: typeof catalog.config?.ctaText === 'string' ? catalog.config.ctaText : '',
       dominioBase: nextDomain,
       descripcion: hasOldExternalBio ? DEFAULT_TEMPLATE_BIO : rawBio,
     },
@@ -540,6 +699,12 @@ export function createCatalogWorkspace(
     tema: StoreTheme;
     descripcion?: string;
     logoUrl?: string;
+    isPro?: boolean;
+    isPublic?: boolean;
+    cardStyle?: StoreCardStyle;
+    bannerText?: string;
+    ctaText?: string;
+    showDiscountBadges?: boolean;
     initialProducts?: Product[];
   },
   existingCatalogs: CatalogWorkspace[]
@@ -563,9 +728,14 @@ export function createCatalogWorkspace(
         input.descripcion?.trim() ||
         `Catálogo oficial de ${cleanName}. Explora nuestras referencias y envía tu pedido directo por WhatsApp.`,
       whatsapp: input.whatsapp.replace(/\D/g, '') || '573001234567',
-      tema: input.tema,
-      isPro: true,
+      tema: normalizeStoreTheme(input.tema),
+      isPro: input.isPro ?? true,
+      isPublic: input.isPublic ?? true,
       logoUrl: input.logoUrl || '',
+      cardStyle: normalizeCardStyle(input.cardStyle),
+      bannerText: (input.bannerText || '').trim().slice(0, 160),
+      ctaText: (input.ctaText || '').trim().slice(0, 40),
+      showDiscountBadges: input.showDiscountBadges ?? true,
     },
     products: input.initialProducts ? [...input.initialProducts] : [],
     updatedAt: new Date().toISOString(),

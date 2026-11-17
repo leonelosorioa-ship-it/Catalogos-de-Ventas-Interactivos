@@ -306,11 +306,36 @@ async function startServer() {
         res.status(400).json({ error: 'Datos de catálogo inválidos.' });
         return;
       }
-      const dbAdmin = await getOrCreateUser(uid, email, req.user?.name);
-      const saved = await adminUpsertCatalog(dbAdmin.id, {
-        ...catalog,
-        id: req.params.catalogId || catalog.id,
-      });
+      const targetId = req.params.catalogId || catalog.id;
+      const requestedSlug = normalizeSlug(catalog.config.subdominio || '');
+      let saved: CatalogWorkspace = { ...catalog, id: targetId };
+
+      try {
+        const dbAdmin = await getOrCreateUser(uid, email, req.user?.name);
+        saved = await adminUpsertCatalog(dbAdmin.id, {
+          ...catalog,
+          id: targetId,
+        });
+        saved = {
+          ...saved,
+          config: {
+            ...saved.config,
+            isPublic: catalog.config.isPublic !== false,
+            cardStyle: catalog.config.cardStyle || 'classic',
+            bannerText: catalog.config.bannerText || '',
+            ctaText: catalog.config.ctaText || '',
+            showDiscountBadges: catalog.config.showDiscountBadges !== false,
+          },
+        };
+      } catch {
+        // Keep public registry updated even if SQL pool is unavailable locally
+      }
+
+      for (const [key, entry] of publicCatalogRegistry.entries()) {
+        if (entry?.id === targetId && key !== requestedSlug) {
+          publicCatalogRegistry.delete(key);
+        }
+      }
       const slug = normalizeSlug(saved.config.subdominio || '');
       if (slug) {
         publicCatalogRegistry.set(slug, saved as unknown as StoredCatalogPayload);
@@ -323,14 +348,71 @@ async function startServer() {
     }
   });
 
+  app.post('/api/admin/catalogs/:catalogId/status', requireAuth, async (req: AuthRequest, res) => {
+    if (!isVerifiedGoogleAdminToken(req.user)) {
+      res.status(403).json({ error: 'Acceso restringido al administrador.' });
+      return;
+    }
+    try {
+      const targetId = req.params.catalogId;
+      const { isPublic, slug } = req.body as { isPublic?: boolean; slug?: string };
+      const nextPublic = Boolean(isPublic);
+      const cleanSlug = typeof slug === 'string' ? normalizeSlug(slug) : '';
+      let updated = false;
+
+      for (const [key, entry] of publicCatalogRegistry.entries()) {
+        if (entry?.id === targetId || (cleanSlug && key === cleanSlug)) {
+          publicCatalogRegistry.set(key, {
+            ...entry,
+            config: {
+              ...entry.config,
+              isPublic: nextPublic,
+            },
+            updatedAt: new Date().toISOString(),
+          });
+          updated = true;
+        }
+      }
+      if (updated) persistCatalogRegistry();
+      res.json({ id: targetId, isPublic: nextPublic, updated });
+    } catch (error) {
+      console.error('Failed to update catalog status as admin:', error);
+      res.status(500).json({ error: 'No se pudo actualizar el estado del catálogo.' });
+    }
+  });
+
   app.delete('/api/admin/catalogs/:catalogId', requireAuth, async (req: AuthRequest, res) => {
     if (!isVerifiedGoogleAdminToken(req.user)) {
       res.status(403).json({ error: 'Acceso restringido al administrador.' });
       return;
     }
     try {
-      const deleted = await adminDeleteCatalogById(req.params.catalogId);
-      res.json({ deleted });
+      const targetId = req.params.catalogId;
+      const querySlug =
+        typeof req.query.slug === 'string' ? normalizeSlug(req.query.slug) : '';
+      let deletedInSql = false;
+      try {
+        deletedInSql = await adminDeleteCatalogById(targetId);
+      } catch {
+        // SQL pool optional locally; still purge public cache below
+      }
+
+      let removedFromRegistry = false;
+      for (const [key, entry] of publicCatalogRegistry.entries()) {
+        if (entry?.id === targetId || (querySlug && key === querySlug)) {
+          publicCatalogRegistry.delete(key);
+          removedFromRegistry = true;
+        }
+      }
+      if (querySlug && publicCatalogRegistry.has(querySlug)) {
+        publicCatalogRegistry.delete(querySlug);
+        removedFromRegistry = true;
+      }
+      if (removedFromRegistry) {
+        persistCatalogRegistry();
+      }
+
+      res.json({ deleted: deletedInSql || removedFromRegistry });
     } catch (error) {
       console.error('Failed to delete catalog as admin:', error);
       res.status(500).json({ error: 'No se pudo eliminar el catálogo.' });
@@ -368,6 +450,15 @@ async function startServer() {
       return;
     }
 
+    const cached = publicCatalogRegistry.get(targetSlug);
+    if (cached && cached.config?.isPublic === false) {
+      res.json({
+        suspended: true,
+        nombre: cached.config?.nombre || 'Tienda Suspendida',
+      });
+      return;
+    }
+
     try {
       const sqlCatalog = await getPublicCatalogBySlug(targetSlug);
       if (sqlCatalog) {
@@ -378,13 +469,12 @@ async function startServer() {
       // Fallback gracefully to in-memory/tmp cache when SQL is unavailable locally
     }
 
-    const found = publicCatalogRegistry.get(targetSlug);
-    if (!found) {
+    if (!cached) {
       res.status(404).json({ error: 'Catálogo no encontrado.' });
       return;
     }
 
-    res.json({ catalog: found });
+    res.json({ catalog: cached });
   });
 
   app.post('/api/ai/extract-catalog', async (req, res) => {
