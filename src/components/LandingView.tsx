@@ -296,7 +296,7 @@ export function LandingView({
                   Tu negocio bajo tu propio enlace profesional
                 </h3>
                 <p className="text-sm text-slate-300 leading-relaxed max-w-lg">
-                  Configura tu subdominio o dominio propio (<span className="font-mono text-white">tutienda.aurentime.shop</span>),
+                  Configura tu enlace corto oficial (<span className="font-mono text-white">catalogos.aurentime.shop/tutienda</span>),
                   logotipo y plantilla visual (Minimalista Claro, Oscuro o Galaxia) en segundos.
                 </p>
               </div>

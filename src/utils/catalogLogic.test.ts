@@ -50,21 +50,21 @@ test('sanitizeDomainBase and formatStoreUrl build custom own-brand URLs', () => 
   assert.equal(DEFAULT_DOMAIN_BASE, 'aurentime.shop');
 });
 
-test('formatDirectStoreUrl and formatDirectStoreDisplay build active ?tienda= links on aurentime.shop', () => {
+test('formatDirectStoreUrl and formatDirectStoreDisplay build short /<slug> links on aurentime.shop', () => {
   assert.equal(
     formatDirectStoreDisplay({ subdominio: 'auren-time', dominioBase: 'aurentime.shop' }),
-    'catalogos.aurentime.shop/?tienda=auren-time'
+    'catalogos.aurentime.shop/auren-time'
   );
   assert.equal(
     formatDirectStoreUrl({ subdominio: 'Auren Time', dominioBase: 'aurentime.shop' }),
-    'https://catalogos.aurentime.shop/?tienda=auren-time'
+    'https://catalogos.aurentime.shop/auren-time'
   );
   assert.equal(
     formatDirectStoreUrl(
-      { subdominio: 'relojes-vip', dominioBase: 'aurentime.shop' },
+      { subdominio: 'relojes', dominioBase: 'aurentime.shop' },
       'https://catalogos.aurentime.shop/'
     ),
-    'https://catalogos.aurentime.shop/?tienda=relojes-vip'
+    'https://catalogos.aurentime.shop/relojes'
   );
 });
 
@@ -73,6 +73,8 @@ test('validateSubdomainSlug and validateCustomDomain enforce strict DNS format a
   assert.equal(validateSubdomainSlug('a').valid, false);
   assert.equal(validateSubdomainSlug('-tienda').valid, false);
   assert.equal(validateSubdomainSlug('mi tienda').valid, false);
+  assert.equal(validateSubdomainSlug('api').valid, false);
+  assert.equal(validateSubdomainSlug('assets').valid, false);
 
   assert.equal(validateCustomDomain('aurentime.shop').valid, true);
   assert.equal(validateCustomDomain('https://LepsDigital.com/').normalized, 'lepsdigital.com');
@@ -311,6 +313,42 @@ test('resolveRouteTarget resolves subdomain hosts, portal host, query params, an
       pathname: '/',
     }),
     { view: 'catalog', catalogSlug: 'relojes' }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'catalogos.aurentime.shop',
+      search: '',
+      pathname: '/relojes',
+    }),
+    { view: 'catalog', catalogSlug: 'relojes' }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'catalogos.aurentime.shop',
+      search: '',
+      pathname: '/auren-time/',
+    }),
+    { view: 'catalog', catalogSlug: 'auren-time' }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'catalogos.aurentime.shop',
+      search: '',
+      pathname: '/favicon.ico',
+    }),
+    { view: null, catalogSlug: null }
+  );
+
+  assert.deepEqual(
+    resolveRouteTarget({
+      hostname: 'catalogos.aurentime.shop',
+      search: '',
+      pathname: '/api',
+    }),
+    { view: null, catalogSlug: null }
   );
 
   assert.deepEqual(

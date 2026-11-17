@@ -182,8 +182,8 @@ export function DashboardView({
   const activeDirectDisplay = formatDirectStoreDisplay(storeConfig);
   const activeDirectLink =
     typeof window !== 'undefined'
-      ? `${window.location.origin}/?tienda=${encodeURIComponent(storeConfig.subdominio)}`
-      : `https://catalogos.${storeConfig.dominioBase || DEFAULT_DOMAIN_BASE}/?tienda=${encodeURIComponent(storeConfig.subdominio)}`;
+      ? `${window.location.origin}/${encodeURIComponent(storeConfig.subdominio)}`
+      : `https://catalogos.${storeConfig.dominioBase || DEFAULT_DOMAIN_BASE}/${encodeURIComponent(storeConfig.subdominio)}`;
   const [directCopied, setDirectCopied] = useState(false);
 
   const handleSaveCustomDomainSubmit = (e: FormEvent) => {
@@ -201,7 +201,7 @@ export function DashboardView({
       dominioBase: check.dominioBase,
       applyToAllCatalogs: applyDomainToAll,
     });
-    triggerFeedback(`Enlace público actualizado: ?tienda=${check.subdominio}`);
+    triggerFeedback(`Enlace público actualizado: /${check.subdominio}`);
   };
 
   const handleCopyPublicUrl = async () => {
@@ -711,8 +711,8 @@ export function DashboardView({
                       </h2>
                       <p className="text-xs text-slate-600 mt-0.5">
                         Tu tienda opera bajo el dominio oficial{' '}
-                        <span className="font-mono">aurentime.shop</span>. El enlace directo con{' '}
-                        <span className="font-mono">?tienda=</span> funciona de inmediato para compartir tu catálogo.
+                        <span className="font-mono">aurentime.shop</span>. El enlace corto directo{' '}
+                        <span className="font-mono">/{storeConfig.subdominio}</span> funciona de inmediato para compartir tu catálogo.
                       </p>
                     </div>
                   </div>
@@ -748,7 +748,7 @@ export function DashboardView({
                         htmlFor="custom-subdomain"
                         className="block text-xs font-semibold text-slate-700 mb-1.5"
                       >
-                        Identificador de la tienda (?tienda=...)
+                        Identificador corto de la tienda (/...)
                       </label>
                       <input
                         id="custom-subdomain"
@@ -824,8 +824,7 @@ export function DashboardView({
                       <span>Enlace público activo (listo para compartir): </span>
                       <strong className="font-mono text-slate-900">
                         https://catalogos.
-                        {domainLiveCheck.dominioBase || DEFAULT_DOMAIN_BASE}
-                        /?tienda=
+                        {domainLiveCheck.dominioBase || DEFAULT_DOMAIN_BASE}/
                         {domainLiveCheck.subdominio || 'subdominio'}
                       </strong>
                     </div>

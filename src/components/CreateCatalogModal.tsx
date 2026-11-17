@@ -188,7 +188,7 @@ export function CreateCatalogModal({
                 </button>
               </div>
               <span className="font-mono text-cyan-700 truncate">
-                catalogos.{sanitizeDomainBase(dominioBase)}/?tienda=
+                catalogos.{sanitizeDomainBase(dominioBase)}/
                 {sanitizeSubdomain(subdominio || nombre || 'onix-joyeria')}
               </span>
             </div>

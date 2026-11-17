@@ -259,6 +259,14 @@ export interface DomainValidationResult {
   error: string | null;
 }
 
+const RESERVED_PATH_SLUGS = new Set([
+  'api',
+  'assets',
+  'src',
+  'public',
+  'node_modules',
+]);
+
 /** Valida el formato del subdominio (slug DNS válido de 2 a 63 caracteres) */
 export function validateSubdomainSlug(input: string): DomainValidationResult {
   const normalized = input.toLowerCase().trim();
@@ -282,6 +290,13 @@ export function validateSubdomainSlug(input: string): DomainValidationResult {
       normalized,
       error:
         'Usa solo letras minúsculas, números y guiones medios (sin espacios ni guiones al inicio o final).',
+    };
+  }
+  if (RESERVED_PATH_SLUGS.has(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      error: 'Ese identificador está reservado por el sistema. Elige otro nombre corto.',
     };
   }
   return { valid: true, normalized, error: null };
@@ -408,7 +423,7 @@ export function formatStoreUrl(
   return `${sub}.${base}`;
 }
 
-/** Formatea el enlace directo funcional inmediato (?tienda=<subdominio>) */
+/** Formatea el enlace corto directo funcional inmediato (/<subdominio>) */
 export function formatDirectStoreUrl(
   config: Pick<StoreConfig, 'subdominio' | 'dominioBase'>,
   origin?: string
@@ -418,10 +433,10 @@ export function formatDirectStoreUrl(
   const base =
     rawBase === 'kr36.link' || rawBase === 'leps.link' ? DEFAULT_DOMAIN_BASE : rawBase;
   const cleanOrigin = (origin || `https://catalogos.${base}`).replace(/\/+$/, '');
-  return `${cleanOrigin}/?tienda=${encodeURIComponent(sub)}`;
+  return `${cleanOrigin}/${encodeURIComponent(sub)}`;
 }
 
-/** Formatea versión compacta legible del enlace directo funcional */
+/** Formatea versión compacta legible del enlace corto directo */
 export function formatDirectStoreDisplay(
   config: Pick<StoreConfig, 'subdominio' | 'dominioBase'>
 ): string {
@@ -429,7 +444,7 @@ export function formatDirectStoreDisplay(
   const rawBase = sanitizeDomainBase(config.dominioBase || DEFAULT_DOMAIN_BASE);
   const base =
     rawBase === 'kr36.link' || rawBase === 'leps.link' ? DEFAULT_DOMAIN_BASE : rawBase;
-  return `catalogos.${base}/?tienda=${sub}`;
+  return `catalogos.${base}/${sub}`;
 }
 
 /** Migra catálogos guardados previamente hacia el dominio oficial aurentime.shop */
@@ -739,7 +754,7 @@ export interface RouteTarget {
   catalogSlug: string | null;
 }
 
-/** Resuelve si la URL actual apunta a un catálogo por subdominio (ej. relojes.aurentime.shop), ruta (/c/relojes) o parámetro (?tienda=relojes) */
+/** Resuelve si la URL actual apunta a un catálogo por ruta corta (/relojes), subdominio (relojes.aurentime.shop), /c/relojes o parámetro (?tienda=relojes) */
 export function resolveRouteTarget(location: {
   hostname: string;
   search: string;
@@ -768,6 +783,20 @@ export function resolveRouteTarget(location: {
     return {
       view: explicitView || 'catalog',
       catalogSlug: sanitizeSubdomain(pathMatch[1]),
+    };
+  }
+
+  const cleanPathname = (location.pathname || '').replace(/^\/+|\/+$/g, '');
+  if (
+    cleanPathname &&
+    !cleanPathname.includes('/') &&
+    !cleanPathname.includes('.') &&
+    /^[a-z0-9-]+$/i.test(cleanPathname) &&
+    !RESERVED_PATH_SLUGS.has(cleanPathname.toLowerCase())
+  ) {
+    return {
+      view: explicitView || 'catalog',
+      catalogSlug: sanitizeSubdomain(cleanPathname),
     };
   }
 
