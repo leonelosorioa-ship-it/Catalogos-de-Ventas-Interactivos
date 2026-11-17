@@ -29,6 +29,8 @@ import {
 } from './blueprintConstraints.ts';
 import { OperationType, db, handleFirestoreError } from './firebase.ts';
 
+const MAX_PRODUCTS_PER_BATCH = 10;
+
 function toIsoString(ts: unknown): string {
   if (
     ts &&
@@ -190,12 +192,61 @@ export function subscribeUserCatalogsInFirestore(
   );
 }
 
+async function resolveNonCollidingCatalogIds(
+  fbUser: User,
+  workspace: CatalogWorkspace
+): Promise<{
+  cleanCat: ReturnType<typeof sanitizeCatalogForFirestore>;
+  changed: boolean;
+}> {
+  const baseCat = sanitizeCatalogForFirestore(workspace, fbUser.uid);
+  const uidTag = fbUser.uid.slice(0, 6).toLowerCase().replace(/[^a-z0-9]/g, 'u');
+  let resolvedId = baseCat.id;
+  let resolvedSlug = baseCat.subdominio;
+  let changed = false;
+
+  // Check if catalogId already belongs to a different user
+  try {
+    const catSnap = await getDoc(doc(db, 'catalogs', resolvedId));
+    if (catSnap.exists() && catSnap.data().ownerUid !== fbUser.uid) {
+      resolvedId = sanitizeIdForFirestore(`cat-${uidTag}-${resolvedSlug}`);
+      changed = true;
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `catalogs/${resolvedId}`);
+  }
+
+  // Check if subdomain slug already belongs to a different user
+  try {
+    const slugSnap = await getDoc(doc(db, 'slugs', resolvedSlug));
+    if (slugSnap.exists() && slugSnap.data().ownerUid !== fbUser.uid) {
+      resolvedSlug = sanitizeSlugForFirestore(
+        `${resolvedSlug.slice(0, 48)}-${uidTag}`
+      );
+      changed = true;
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `slugs/${resolvedSlug}`);
+  }
+
+  return {
+    cleanCat: {
+      ...baseCat,
+      id: resolvedId,
+      subdominio: resolvedSlug,
+    },
+    changed,
+  };
+}
+
 export async function syncCatalogsToFirestore(
   fbUser: User,
   catalogs: CatalogWorkspace[],
   platformDomain: string
-): Promise<void> {
-  if (!fbUser.emailVerified) return;
+): Promise<{ catalogs: CatalogWorkspace[]; idsUpdated: boolean }> {
+  if (!fbUser.emailVerified) {
+    return { catalogs, idsUpdated: false };
+  }
 
   await ensureUserProfileInFirestore(fbUser, platformDomain);
 
@@ -212,26 +263,69 @@ export async function syncCatalogsToFirestore(
   }
 
   const existingById = new Map(existingCatalogDocs.docs.map((d) => [d.id, d.data()]));
-  const desiredCatalogIds = new Set(
-    catalogs.map((c) => sanitizeIdForFirestore(c.id))
-  );
 
-  // 1. Delete removed catalogs (child products first to preserve Master Gate parent get())
+  const resolvedPairs: Array<{
+    original: CatalogWorkspace;
+    cleanCat: ReturnType<typeof sanitizeCatalogForFirestore>;
+  }> = [];
+  let idsUpdated = false;
+
+  for (const workspace of catalogs) {
+    const { cleanCat, changed } = await resolveNonCollidingCatalogIds(fbUser, workspace);
+    if (changed) idsUpdated = true;
+    resolvedPairs.push({
+      original: {
+        ...workspace,
+        id: cleanCat.id,
+        ownerEmail: fbUser.email || workspace.ownerEmail,
+        config: {
+          ...workspace.config,
+          subdominio: cleanCat.subdominio,
+          dominioBase: cleanCat.dominioBase,
+        },
+      },
+      cleanCat,
+    });
+  }
+
+  const desiredCatalogIds = new Set(resolvedPairs.map((p) => p.cleanCat.id));
+
+  // 1. Delete removed catalogs (products in chunks first to stay below batch lookup limits)
   for (const existingDoc of existingCatalogDocs.docs) {
     if (!desiredCatalogIds.has(existingDoc.id)) {
-      const batch = writeBatch(db);
       const productsSnap = await getDocs(
         query(
           collection(db, 'catalogs', existingDoc.id, 'products'),
           where('ownerUid', '==', fbUser.uid)
         )
       );
-      for (const pDoc of productsSnap.docs) {
-        batch.delete(pDoc.ref);
+      for (let i = 0; i < productsSnap.docs.length; i += MAX_PRODUCTS_PER_BATCH) {
+        const prodDelBatch = writeBatch(db);
+        for (const pDoc of productsSnap.docs.slice(i, i + MAX_PRODUCTS_PER_BATCH)) {
+          prodDelBatch.delete(pDoc.ref);
+        }
+        try {
+          await prodDelBatch.commit();
+        } catch (error) {
+          handleFirestoreError(
+            error,
+            OperationType.DELETE,
+            `catalogs/${existingDoc.id}/products`
+          );
+        }
       }
+
+      const batch = writeBatch(db);
       const oldSlug = sanitizeSlugForFirestore(String(existingDoc.data().subdominio || ''));
       if (oldSlug) {
-        batch.delete(doc(db, 'slugs', oldSlug));
+        try {
+          const oldSlugSnap = await getDoc(doc(db, 'slugs', oldSlug));
+          if (oldSlugSnap.exists() && oldSlugSnap.data().ownerUid === fbUser.uid) {
+            batch.delete(oldSlugSnap.ref);
+          }
+        } catch {
+          // ignore non-owned slug
+        }
       }
       batch.delete(existingDoc.ref);
       try {
@@ -242,26 +336,14 @@ export async function syncCatalogsToFirestore(
     }
   }
 
-  // 2. Upsert active catalogs, products subcollection, and atomic slug lookup docs
-  for (const workspace of catalogs) {
-    const cleanCat = sanitizeCatalogForFirestore(workspace, fbUser.uid);
+  // 2. Upsert active catalogs + slugs first, then products in batches of <= 10
+  for (const { original: workspace, cleanCat } of resolvedPairs) {
     const catRef = doc(db, 'catalogs', cleanCat.id);
     const existingCat = existingById.get(cleanCat.id);
 
-    const existingProductsSnap = await getDocs(
-      query(
-        collection(db, 'catalogs', cleanCat.id, 'products'),
-        where('ownerUid', '==', fbUser.uid)
-      )
-    );
-    const existingProductsMap = new Map(
-      existingProductsSnap.docs.map((d) => [d.id, d.data()])
-    );
-
-    const batch = writeBatch(db);
-
+    const catBatch = writeBatch(db);
     if (existingCat) {
-      batch.update(catRef, {
+      catBatch.update(catRef, {
         nombre: cleanCat.nombre,
         subdominio: cleanCat.subdominio,
         dominioBase: cleanCat.dominioBase,
@@ -276,10 +358,13 @@ export async function syncCatalogsToFirestore(
 
       const prevSlug = sanitizeSlugForFirestore(String(existingCat.subdominio || ''));
       if (prevSlug && prevSlug !== cleanCat.subdominio) {
-        batch.delete(doc(db, 'slugs', prevSlug));
+        const prevSlugSnap = await getDoc(doc(db, 'slugs', prevSlug));
+        if (prevSlugSnap.exists() && prevSlugSnap.data().ownerUid === fbUser.uid) {
+          catBatch.delete(prevSlugSnap.ref);
+        }
       }
     } else {
-      batch.set(catRef, {
+      catBatch.set(catRef, {
         ...cleanCat,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -289,13 +374,13 @@ export async function syncCatalogsToFirestore(
     const slugRef = doc(db, 'slugs', cleanCat.subdominio);
     const slugSnap = await getDoc(slugRef);
     if (slugSnap.exists() && slugSnap.data().ownerUid === fbUser.uid) {
-      batch.update(slugRef, {
+      catBatch.update(slugRef, {
         catalogId: cleanCat.id,
         isPublic: cleanCat.isPublic,
         updatedAt: serverTimestamp(),
       });
     } else if (!slugSnap.exists()) {
-      batch.set(slugRef, {
+      catBatch.set(slugRef, {
         slug: cleanCat.subdominio,
         catalogId: cleanCat.id,
         ownerUid: fbUser.uid,
@@ -305,7 +390,29 @@ export async function syncCatalogsToFirestore(
       });
     }
 
+    try {
+      await catBatch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `catalogs/${cleanCat.id}`);
+    }
+
+    const existingProductsSnap = await getDocs(
+      query(
+        collection(db, 'catalogs', cleanCat.id, 'products'),
+        where('ownerUid', '==', fbUser.uid)
+      )
+    );
+    const existingProductsMap = new Map(
+      existingProductsSnap.docs.map((d) => [d.id, d.data()])
+    );
+
     const desiredProductIds = new Set<string>();
+    const productOps: Array<{
+      docId: string;
+      isUpdate: boolean;
+      data: ReturnType<typeof sanitizeProductForFirestore>;
+    }> = [];
+
     workspace.products.forEach((prod, index) => {
       const cleanProd = sanitizeProductForFirestore(
         prod,
@@ -316,40 +423,72 @@ export async function syncCatalogsToFirestore(
       );
       const prodDocId = `prod-${cleanProd.id}`;
       desiredProductIds.add(prodDocId);
-      const prodRef = doc(db, 'catalogs', cleanCat.id, 'products', prodDocId);
-      if (existingProductsMap.has(prodDocId)) {
-        batch.update(prodRef, {
-          nombre: cleanProd.nombre,
-          categoria: cleanProd.categoria,
-          precioActual: cleanProd.precioActual,
-          precioAnterior: cleanProd.precioAnterior,
-          descripcion: cleanProd.descripcion,
-          imagen: cleanProd.imagen,
-          sortOrder: cleanProd.sortOrder,
-          isPublic: cleanProd.isPublic,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        batch.set(prodRef, {
-          ...cleanProd,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
+      productOps.push({
+        docId: prodDocId,
+        isUpdate: existingProductsMap.has(prodDocId),
+        data: cleanProd,
+      });
     });
 
-    for (const existingProdDoc of existingProductsSnap.docs) {
-      if (!desiredProductIds.has(existingProdDoc.id)) {
-        batch.delete(existingProdDoc.ref);
+    for (let i = 0; i < productOps.length; i += MAX_PRODUCTS_PER_BATCH) {
+      const prodBatch = writeBatch(db);
+      for (const op of productOps.slice(i, i + MAX_PRODUCTS_PER_BATCH)) {
+        const prodRef = doc(db, 'catalogs', cleanCat.id, 'products', op.docId);
+        if (op.isUpdate) {
+          prodBatch.update(prodRef, {
+            nombre: op.data.nombre,
+            categoria: op.data.categoria,
+            precioActual: op.data.precioActual,
+            precioAnterior: op.data.precioAnterior,
+            descripcion: op.data.descripcion,
+            imagen: op.data.imagen,
+            sortOrder: op.data.sortOrder,
+            isPublic: op.data.isPublic,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          prodBatch.set(prodRef, {
+            ...op.data,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+      try {
+        await prodBatch.commit();
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.WRITE,
+          `catalogs/${cleanCat.id}/products`
+        );
       }
     }
 
-    try {
-      await batch.commit();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `catalogs/${cleanCat.id}`);
+    const removedProductDocs = existingProductsSnap.docs.filter(
+      (d) => !desiredProductIds.has(d.id)
+    );
+    for (let i = 0; i < removedProductDocs.length; i += MAX_PRODUCTS_PER_BATCH) {
+      const delBatch = writeBatch(db);
+      for (const d of removedProductDocs.slice(i, i + MAX_PRODUCTS_PER_BATCH)) {
+        delBatch.delete(d.ref);
+      }
+      try {
+        await delBatch.commit();
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.DELETE,
+          `catalogs/${cleanCat.id}/products`
+        );
+      }
     }
   }
+
+  return {
+    catalogs: resolvedPairs.map((p) => p.original),
+    idsUpdated,
+  };
 }
 
 export async function fetchPublicCatalogFromFirestore(

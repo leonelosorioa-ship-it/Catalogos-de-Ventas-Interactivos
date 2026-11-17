@@ -173,6 +173,7 @@ export default function App() {
   const skipNextCloudSaveRef = useRef(false);
   const skipNextFirestoreSaveRef = useRef(false);
   const firestoreSeedAttemptedRef = useRef<string | null>(null);
+  const hydratedFirestoreUidRef = useRef<string | null>(null);
 
   const localMatchedCatalog = initialRoute.catalogSlug
     ? findCatalogBySlug(catalogs, initialRoute.catalogSlug)
@@ -245,6 +246,7 @@ export default function App() {
       if (!fbUser) {
         setFirebaseIdToken(null);
         firestoreSeedAttemptedRef.current = null;
+        hydratedFirestoreUidRef.current = null;
         return;
       }
       try {
@@ -289,6 +291,7 @@ export default function App() {
       firebaseUser.email || '',
       (fsCatalogs) => {
         if (fsCatalogs.length > 0) {
+          hydratedFirestoreUidRef.current = firebaseUser.uid;
           skipNextFirestoreSaveRef.current = true;
           setCatalogs(fsCatalogs);
           setActiveCatalogId((prev) =>
@@ -299,11 +302,20 @@ export default function App() {
           catalogs.length > 0
         ) {
           firestoreSeedAttemptedRef.current = firebaseUser.uid;
-          void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain).catch(
-            (err) => {
+          void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain)
+            .then((result) => {
+              hydratedFirestoreUidRef.current = firebaseUser.uid;
+              if (result.idsUpdated) {
+                skipNextFirestoreSaveRef.current = true;
+                setCatalogs(result.catalogs);
+                setActiveCatalogId(result.catalogs[0]?.id || activeCatalogId);
+              }
+            })
+            .catch((err) => {
               if (err instanceof Error) setFatalFirestoreError(err);
-            }
-          );
+            });
+        } else {
+          hydratedFirestoreUidRef.current = firebaseUser.uid;
         }
       }
     );
@@ -398,15 +410,24 @@ export default function App() {
       }
     }
 
-    if (firebaseUser && firebaseUser.emailVerified) {
+    if (
+      firebaseUser &&
+      firebaseUser.emailVerified &&
+      hydratedFirestoreUidRef.current === firebaseUser.uid
+    ) {
       if (skipNextFirestoreSaveRef.current) {
         skipNextFirestoreSaveRef.current = false;
       } else {
-        void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain).catch(
-          (err) => {
+        void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain)
+          .then((result) => {
+            if (result.idsUpdated) {
+              skipNextFirestoreSaveRef.current = true;
+              setCatalogs(result.catalogs);
+            }
+          })
+          .catch((err) => {
             if (err instanceof Error) setFatalFirestoreError(err);
-          }
-        );
+          });
       }
     }
   }, [catalogs, firebaseIdToken, firebaseUser, platformDomain]);

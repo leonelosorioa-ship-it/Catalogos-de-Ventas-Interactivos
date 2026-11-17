@@ -347,8 +347,7 @@ service cloud.firestore {
           isValidCatalogProduct(incoming(), catalogId) &&
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
-          getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid &&
-          incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.isPublic;
+          getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid;
 
         allow update: if isVerifiedUser() &&
           isValidId(catalogId) &&
@@ -361,7 +360,6 @@ service cloud.firestore {
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
           getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid &&
-          incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.isPublic &&
           (
             // Action: Drag & Drop reorder
             incoming().diff(existing()).affectedKeys().hasOnly(['sortOrder', 'updatedAt']) ||
@@ -401,8 +399,7 @@ service cloud.firestore {
         isValidSlugLookup(incoming(), slugId) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
-        getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid &&
-        incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.isPublic;
+        getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid;
 
       allow update: if isVerifiedUser() &&
         isValidSlugId(slugId) &&
@@ -413,7 +410,6 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid &&
-        incoming().isPublic == getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.isPublic &&
         incoming().diff(existing()).affectedKeys().hasOnly(['catalogId', 'isPublic', 'updatedAt']);
 
       allow delete: if isVerifiedUser() &&
