@@ -408,6 +408,30 @@ export function formatStoreUrl(
   return `${sub}.${base}`;
 }
 
+/** Formatea el enlace directo funcional inmediato (?tienda=<subdominio>) */
+export function formatDirectStoreUrl(
+  config: Pick<StoreConfig, 'subdominio' | 'dominioBase'>,
+  origin?: string
+): string {
+  const sub = sanitizeSubdomain(config.subdominio || 'mi-tienda');
+  const rawBase = sanitizeDomainBase(config.dominioBase || DEFAULT_DOMAIN_BASE);
+  const base =
+    rawBase === 'kr36.link' || rawBase === 'leps.link' ? DEFAULT_DOMAIN_BASE : rawBase;
+  const cleanOrigin = (origin || `https://catalogos.${base}`).replace(/\/+$/, '');
+  return `${cleanOrigin}/?tienda=${encodeURIComponent(sub)}`;
+}
+
+/** Formatea versión compacta legible del enlace directo funcional */
+export function formatDirectStoreDisplay(
+  config: Pick<StoreConfig, 'subdominio' | 'dominioBase'>
+): string {
+  const sub = sanitizeSubdomain(config.subdominio || 'mi-tienda');
+  const rawBase = sanitizeDomainBase(config.dominioBase || DEFAULT_DOMAIN_BASE);
+  const base =
+    rawBase === 'kr36.link' || rawBase === 'leps.link' ? DEFAULT_DOMAIN_BASE : rawBase;
+  return `catalogos.${base}/?tienda=${sub}`;
+}
+
 /** Migra catálogos guardados previamente hacia el dominio oficial aurentime.shop */
 export function migrateCatalogWorkspace(catalog: CatalogWorkspace): CatalogWorkspace {
   const rawDomain = sanitizeDomainBase(catalog.config?.dominioBase || DEFAULT_DOMAIN_BASE);

@@ -145,7 +145,7 @@ export function CreateCatalogModal({
               htmlFor="new-cat-subdomain"
               className="block text-xs font-semibold text-slate-700 mb-1.5"
             >
-              Subdominio y dominio propio
+              Identificador de tienda y dominio oficial
             </label>
             <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
               <input
@@ -167,32 +167,29 @@ export function CreateCatalogModal({
                 type="text"
                 value={dominioBase}
                 onChange={(e) => setDominioBase(sanitizeDomainBase(e.target.value))}
-                aria-label="Dominio propio"
+                aria-label="Dominio oficial"
                 placeholder="aurentime.shop"
                 className="w-36 min-h-[44px] px-2.5 py-2 bg-slate-50 text-xs font-mono text-slate-800 focus:outline-none"
               />
             </div>
             <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
               <div className="flex items-center gap-1.5">
-                <span>Dominio:</span>
-                {['aurentime.shop', 'lepsdigital.com'].map((dom) => (
-                  <button
-                    key={dom}
-                    type="button"
-                    onClick={() => setDominioBase(dom)}
-                    className={`font-mono px-1.5 py-0.5 rounded border transition-colors ${
-                      sanitizeDomainBase(dominioBase) === dom
-                        ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                    }`}
-                  >
-                    .{dom}
-                  </button>
-                ))}
+                <span>Dominio oficial:</span>
+                <button
+                  type="button"
+                  onClick={() => setDominioBase('aurentime.shop')}
+                  className={`font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                    sanitizeDomainBase(dominioBase) === 'aurentime.shop'
+                      ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
+                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                  }`}
+                >
+                  .aurentime.shop
+                </button>
               </div>
-              <span className="font-mono text-cyan-700">
-                {sanitizeSubdomain(subdominio || nombre || 'onix-joyeria')}.
-                {sanitizeDomainBase(dominioBase)}
+              <span className="font-mono text-cyan-700 truncate">
+                catalogos.{sanitizeDomainBase(dominioBase)}/?tienda=
+                {sanitizeSubdomain(subdominio || nombre || 'onix-joyeria')}
               </span>
             </div>
           </div>

@@ -16,7 +16,7 @@ import {
   calculateDiscountPercent,
   extractUniqueCategories,
   formatCOP,
-  formatStoreUrl,
+  formatDirectStoreDisplay,
   type CartItem,
   type Product,
   type StoreConfig,
@@ -165,7 +165,7 @@ export function CatalogView({
       <header className={`sticky top-0 z-30 backdrop-blur-md border-b ${styles.headerBg}`}>
         <div className="max-w-5xl mx-auto px-4 h-13 flex items-center justify-between gap-4">
           <span className={`font-mono text-xs truncate ${styles.mutedText}`}>
-            {formatStoreUrl(storeConfig)}
+            {formatDirectStoreDisplay(storeConfig)}
           </span>
 
           <button

@@ -12,6 +12,8 @@ import {
   ensureUniqueSubdomain,
   findCatalogBySlug,
   formatCOP,
+  formatDirectStoreDisplay,
+  formatDirectStoreUrl,
   formatStoreUrl,
   isTemplateBioWarning,
   loadPlatformDomainBase,
@@ -46,6 +48,24 @@ test('sanitizeDomainBase and formatStoreUrl build custom own-brand URLs', () => 
   );
   assert.equal(DEFAULT_STORE_CONFIG.dominioBase, DEFAULT_DOMAIN_BASE);
   assert.equal(DEFAULT_DOMAIN_BASE, 'aurentime.shop');
+});
+
+test('formatDirectStoreUrl and formatDirectStoreDisplay build active ?tienda= links on aurentime.shop', () => {
+  assert.equal(
+    formatDirectStoreDisplay({ subdominio: 'auren-time', dominioBase: 'aurentime.shop' }),
+    'catalogos.aurentime.shop/?tienda=auren-time'
+  );
+  assert.equal(
+    formatDirectStoreUrl({ subdominio: 'Auren Time', dominioBase: 'aurentime.shop' }),
+    'https://catalogos.aurentime.shop/?tienda=auren-time'
+  );
+  assert.equal(
+    formatDirectStoreUrl(
+      { subdominio: 'relojes-vip', dominioBase: 'aurentime.shop' },
+      'https://catalogos.aurentime.shop/'
+    ),
+    'https://catalogos.aurentime.shop/?tienda=relojes-vip'
+  );
 });
 
 test('validateSubdomainSlug and validateCustomDomain enforce strict DNS format and block kr36.link', () => {

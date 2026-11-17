@@ -26,6 +26,7 @@ import {
   calculateDiscountPercent,
   extractUniqueCategories,
   formatCOP,
+  formatDirectStoreDisplay,
   formatStoreUrl,
   getAverageDiscountPercent,
   isTemplateBioWarning,
@@ -178,10 +179,11 @@ export function DashboardView({
 
   const domainLiveCheck = validateDomainConfig(draftSubdomain, draftDomainBase);
   const activeFullUrl = formatStoreUrl(storeConfig);
+  const activeDirectDisplay = formatDirectStoreDisplay(storeConfig);
   const activeDirectLink =
     typeof window !== 'undefined'
       ? `${window.location.origin}/?tienda=${encodeURIComponent(storeConfig.subdominio)}`
-      : `/?tienda=${encodeURIComponent(storeConfig.subdominio)}`;
+      : `https://catalogos.${storeConfig.dominioBase || DEFAULT_DOMAIN_BASE}/?tienda=${encodeURIComponent(storeConfig.subdominio)}`;
   const [directCopied, setDirectCopied] = useState(false);
 
   const handleSaveCustomDomainSubmit = (e: FormEvent) => {
@@ -199,12 +201,12 @@ export function DashboardView({
       dominioBase: check.dominioBase,
       applyToAllCatalogs: applyDomainToAll,
     });
-    triggerFeedback(`Dominio guardado: ${check.subdominio}.${check.dominioBase}`);
+    triggerFeedback(`Enlace público actualizado: ?tienda=${check.subdominio}`);
   };
 
   const handleCopyPublicUrl = async () => {
     try {
-      await navigator.clipboard?.writeText(`https://${activeFullUrl}`);
+      await navigator.clipboard?.writeText(activeDirectLink);
     } catch {
       // clipboard API may be restricted in headless contexts
     }
@@ -435,7 +437,7 @@ export function DashboardView({
               ))}
             </select>
             <p className="font-mono text-[11px] text-cyan-400 truncate mt-1.5">
-              {formatStoreUrl(storeConfig)}
+              {activeDirectDisplay}
             </p>
           </div>
 
@@ -624,7 +626,7 @@ export function DashboardView({
                           {cat.config.nombre}
                         </h2>
                         <p className="font-mono text-xs text-cyan-700 truncate mt-0.5">
-                          {formatStoreUrl(cat.config)}
+                          {formatDirectStoreDisplay(cat.config)}
                         </p>
                         <p className="text-xs text-slate-600 mt-3 tabular-nums">
                           {cat.products.length} productos publicados
@@ -705,24 +707,24 @@ export function DashboardView({
                         id="custom-domain-heading"
                         className="font-display text-lg font-bold text-slate-900"
                       >
-                        Dominio Personalizado y Enlace Público
+                        Enlace Público y Dominio Oficial
                       </h2>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        Configura tu dominio oficial (<span className="font-mono">aurentime.shop</span>{' '}
-                        o <span className="font-mono">tumarca.com</span>) con validación de formato y
-                        persistencia independiente.
+                        Tu tienda opera bajo el dominio oficial{' '}
+                        <span className="font-mono">aurentime.shop</span>. El enlace directo con{' '}
+                        <span className="font-mono">?tienda=</span> funciona de inmediato para compartir tu catálogo.
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="font-mono text-xs bg-slate-100 border border-slate-200 text-slate-800 px-3 py-1.5 rounded-lg">
-                      {activeFullUrl}
+                  <div className="flex items-center gap-2 shrink-0 max-w-full">
+                    <span className="font-mono text-xs bg-emerald-50 border border-emerald-200 text-emerald-900 px-3 py-1.5 rounded-lg truncate">
+                      {activeDirectDisplay}
                     </span>
                     <button
                       type="button"
                       onClick={handleCopyPublicUrl}
-                      className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5"
+                      className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5 shrink-0"
                     >
                       {domainCopied ? (
                         <>
@@ -732,7 +734,7 @@ export function DashboardView({
                       ) : (
                         <>
                           <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>Copiar</span>
+                          <span>Copiar enlace</span>
                         </>
                       )}
                     </button>
@@ -746,7 +748,7 @@ export function DashboardView({
                         htmlFor="custom-subdomain"
                         className="block text-xs font-semibold text-slate-700 mb-1.5"
                       >
-                        Subdominio de la tienda
+                        Identificador de la tienda (?tienda=...)
                       </label>
                       <input
                         id="custom-subdomain"
@@ -767,11 +769,11 @@ export function DashboardView({
                         htmlFor="custom-domain-base"
                         className="block text-xs font-semibold text-slate-700 mb-1.5"
                       >
-                        Dominio personalizado (sin https://)
+                        Dominio oficial de plataforma (sin https://)
                       </label>
                       <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
                         <span className="px-3 py-2.5 bg-slate-100 border-r border-slate-200 text-xs font-mono text-slate-500 shrink-0">
-                          .
+                          catalogos.
                         </span>
                         <input
                           id="custom-domain-base"
@@ -787,24 +789,21 @@ export function DashboardView({
                         />
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                        <span>Dominios disponibles:</span>
-                        {['aurentime.shop', 'lepsdigital.com'].map((dom) => (
-                          <button
-                            key={dom}
-                            type="button"
-                            onClick={() => {
-                              setDraftDomainBase(dom);
-                              setDomainFormError(null);
-                            }}
-                            className={`font-mono px-2 py-0.5 rounded border transition-colors ${
-                              draftDomainBase.trim().toLowerCase() === dom
-                                ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
-                                : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                            }`}
-                          >
-                            .{dom}
-                          </button>
-                        ))}
+                        <span>Dominio oficial:</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDraftDomainBase(DEFAULT_DOMAIN_BASE);
+                            setDomainFormError(null);
+                          }}
+                          className={`font-mono px-2 py-0.5 rounded border transition-colors ${
+                            draftDomainBase.trim().toLowerCase() === DEFAULT_DOMAIN_BASE
+                              ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
+                              : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                          }`}
+                        >
+                          .{DEFAULT_DOMAIN_BASE}
+                        </button>
                         <span className="text-slate-400">· Base guardada: .{platformDomain}</span>
                       </div>
                     </div>
@@ -821,18 +820,18 @@ export function DashboardView({
                   )}
 
                   <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="text-xs text-slate-600">
-                      <span>Vista previa del enlace: </span>
+                    <div className="text-xs text-slate-600 break-all">
+                      <span>Enlace público activo (listo para compartir): </span>
                       <strong className="font-mono text-slate-900">
-                        https://
-                        {domainLiveCheck.subdominio || 'subdominio'}.
-                        {domainLiveCheck.dominioBase || 'aurentime.shop'}
+                        https://catalogos.
+                        {domainLiveCheck.dominioBase || DEFAULT_DOMAIN_BASE}
+                        /?tienda=
+                        {domainLiveCheck.subdominio || 'subdominio'}
                       </strong>
                     </div>
                     {domainLiveCheck.valid &&
-                      domainLiveCheck.dominioBase !== 'aurentime.shop' &&
-                      domainLiveCheck.dominioBase !== 'lepsdigital.com' && (
-                        <span className="text-[11px] font-mono text-cyan-800">
+                      domainLiveCheck.dominioBase !== DEFAULT_DOMAIN_BASE && (
+                        <span className="text-[11px] font-mono text-cyan-800 shrink-0">
                           DNS sugerido: CNAME * → cname.aurentime.shop
                         </span>
                       )}
@@ -856,19 +855,19 @@ export function DashboardView({
                       type="submit"
                       className="min-h-[42px] px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
                     >
-                      Guardar dominio personalizado
+                      Guardar enlace y dominio
                     </button>
                   </div>
                 </form>
 
-                {/* Working direct URL + DNS activation checklist */}
+                {/* Active direct URL + optional dedicated subdomain warning */}
                 <div className="pt-4 border-t border-slate-100 grid lg:grid-cols-2 gap-4">
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 space-y-2">
                     <p className="text-xs font-semibold text-emerald-900">
-                      Enlace funcional inmediato (mientras activas tu DNS)
+                      Enlace público activo de tu tienda (listo para compartir)
                     </p>
                     <p className="text-[11px] text-emerald-800 leading-relaxed">
-                      Usa este enlace directo en tus redes sociales o WhatsApp para abrir{' '}
+                      Usa este enlace directo en tus redes sociales, biografía o WhatsApp para abrir{' '}
                       <strong>{storeConfig.nombre}</strong> de inmediato:
                     </p>
                     <div className="flex items-center gap-2">
@@ -885,20 +884,24 @@ export function DashboardView({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5 text-[11px] text-slate-600">
-                    <p className="text-xs font-semibold text-slate-800">
-                      Activar https://{activeFullUrl} sin error NXDOMAIN
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 space-y-1.5 text-[11px] text-slate-700">
+                    <p className="text-xs font-semibold text-amber-950">
+                      Subdominio directo (https://{activeFullUrl}) — Opcional, no activo automáticamente
                     </p>
                     <p>
-                      1. Publica la app en Cloud Run y agrega tu dominio en{' '}
+                      Este subdominio independiente <strong>NO funciona por defecto</strong> si no lo
+                      mapeas manualmente en Google Cloud y tu DNS:
+                    </p>
+                    <p>
+                      1. Agrega el subdominio en{' '}
                       <strong>Cloud Run → Domain Mappings</strong> (o usa Cloudflare Proxy).
                     </p>
                     <p>
-                      2. En tu proveedor DNS crea el registro{' '}
+                      2. Crea en tu DNS el registro{' '}
                       <code className="font-mono text-slate-900">
                         CNAME {storeConfig.subdominio} → ghs.googlehosted.com
-                      </code>{' '}
-                      (o apunta <code className="font-mono text-slate-900">*</code>).
+                      </code>
+                      .
                     </p>
                   </div>
                 </div>
@@ -1020,7 +1023,7 @@ export function DashboardView({
                         <span>
                           Escribe tu propia descripción arriba (o haz clic en{' '}
                           <strong>Aplicar texto sugerido</strong>) para quitar este aviso antes de
-                          compartir <strong className="font-mono">{formatStoreUrl(storeConfig)}</strong>.
+                          compartir <strong className="font-mono">{activeDirectDisplay}</strong>.
                         </span>
                       </div>
                     </div>
@@ -1107,7 +1110,7 @@ export function DashboardView({
                           <div
                             className={`h-8 rounded-lg border mb-3 flex items-center px-2.5 text-[11px] font-mono truncate ${theme.swatchClass}`}
                           >
-                            {formatStoreUrl(storeConfig)}
+                            {activeDirectDisplay}
                           </div>
                           <p className="text-sm font-semibold text-slate-900">{theme.name}</p>
                           <p className="text-xs text-slate-500 mt-0.5">{theme.desc}</p>

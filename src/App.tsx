@@ -21,7 +21,7 @@ import {
   STORAGE_KEYS,
   createCatalogWorkspace,
   findCatalogBySlug,
-  formatStoreUrl,
+  formatDirectStoreDisplay,
   loadPlatformDomainBase,
   migrateCatalogWorkspace,
   resolveRouteTarget,
@@ -657,7 +657,7 @@ export default function App() {
       {effectiveView === 'landing' && (
         <LandingView
           storeName={activeCatalog.config.nombre}
-          storeUrl={formatStoreUrl(activeCatalog.config)}
+          storeUrl={formatDirectStoreDisplay(activeCatalog.config)}
           productCount={activeCatalog.products.length}
           onNavigate={handleNavigate}
         />
