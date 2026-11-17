@@ -31,6 +31,7 @@ interface CatalogViewProps {
   onUpdateCartQty: (productId: number, delta: number) => void;
   onClearCart: () => void;
   onOpenAdmin: () => void;
+  isMerchantLoggedIn?: boolean;
 }
 
 const THEME_STYLES: Record<
@@ -103,6 +104,7 @@ export function CatalogView({
   onUpdateCartQty,
   onClearCart,
   onOpenAdmin,
+  isMerchantLoggedIn = false,
 }: CatalogViewProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const [searchQuery, setSearchQuery] = useState('');
@@ -173,7 +175,7 @@ export function CatalogView({
             onClick={onOpenAdmin}
             className={`text-xs font-medium hover:underline whitespace-nowrap shrink-0 ${styles.mutedText}`}
           >
-            Administrar tienda
+            {isMerchantLoggedIn ? 'Volver a mi panel' : 'Acceso comercio'}
           </button>
         </div>
       </header>
@@ -183,13 +185,13 @@ export function CatalogView({
         <section className={`pb-6 border-b ${styles.divider}`}>
           <div className="flex items-start gap-4">
             <div
-              className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border overflow-hidden flex items-center justify-center shrink-0 ${styles.cardBg}`}
+              className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl border overflow-hidden flex items-center justify-center shrink-0 p-1 ${styles.cardBg}`}
             >
               {storeConfig.logoUrl ? (
                 <img
                   src={storeConfig.logoUrl}
                   alt={`Logotipo de ${storeConfig.nombre}`}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain"
                 />
               ) : (
                 <span className={`font-display font-bold text-xl ${styles.headingText}`}>

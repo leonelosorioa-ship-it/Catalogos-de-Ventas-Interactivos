@@ -19,6 +19,7 @@ import { signInWithPopup } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
 import {
   DEFAULT_DEMO_USER,
+  PLATFORM_ADMIN_EMAIL,
   validateAuthCredentials,
   type UserAccount,
 } from '../utils/catalogLogic';
@@ -30,6 +31,7 @@ interface AuthLoginViewProps {
     uid: string;
     email: string;
     name: string;
+    emailVerified: boolean;
     idToken: string;
   }) => Promise<void> | void;
   onRegisterSuccess: (newUser: UserAccount) => void;
@@ -55,7 +57,7 @@ const CONTROL_CENTER_FEATURES = [
   {
     icon: Globe,
     title: 'URLs personalizadas',
-    detail: 'Asigna tu subdominio o dominio propio tipo tutienda.aurentime.shop al instante.',
+    detail: 'Obtén tu enlace corto listo para compartir tipo catalogos.aurentime.shop/tutienda al instante.',
   },
   {
     icon: BarChart3,
@@ -104,6 +106,7 @@ export function AuthLoginView({
             credential.user.displayName ||
             credential.user.email?.split('@')[0] ||
             'Administrador',
+          emailVerified: credential.user.emailVerified,
           idToken,
         });
       }
@@ -144,6 +147,13 @@ export function AuthLoginView({
 
     const cleanEmail = email.trim().toLowerCase();
 
+    if (cleanEmail === PLATFORM_ADMIN_EMAIL) {
+      setErrorMsg(
+        `La cuenta administrativa ${PLATFORM_ADMIN_EMAIL} inicia sesión exclusivamente mediante el botón "Continuar con Google".`
+      );
+      return;
+    }
+
     if (mode === 'login') {
       const existing = users.find((u) => u.email.toLowerCase() === cleanEmail);
       if (!existing) {
@@ -156,7 +166,12 @@ export function AuthLoginView({
         setErrorMsg('Contraseña incorrecta. Verifica tus datos o ingresa con la cuenta demo.');
         return;
       }
-      onLoginSuccess(existing);
+      onLoginSuccess({
+        ...existing,
+        role: 'merchant',
+        authProvider: 'local',
+        emailVerified: false,
+      });
       return;
     }
 
@@ -172,6 +187,9 @@ export function AuthLoginView({
       email: cleanEmail,
       password,
       createdAt: new Date().toISOString(),
+      role: 'merchant',
+      authProvider: 'local',
+      emailVerified: false,
     };
     onRegisterSuccess(newUser);
   };
@@ -181,7 +199,12 @@ export function AuthLoginView({
     const demoUser =
       users.find((u) => u.email.toLowerCase() === DEFAULT_DEMO_USER.email) ||
       DEFAULT_DEMO_USER;
-    onLoginSuccess(demoUser);
+    onLoginSuccess({
+      ...demoUser,
+      role: 'merchant',
+      authProvider: 'local',
+      emailVerified: false,
+    });
   };
 
   return (
@@ -205,12 +228,12 @@ export function AuthLoginView({
           </button>
 
           <span className="font-mono text-xs text-cyan-400">
-            portal.aurentime.shop
+            catalogos.aurentime.shop
           </span>
         </div>
 
         <div className="grid lg:grid-cols-12 gap-6 lg:gap-8 items-stretch">
-          {/* Left Panel: Portal de Acceso Administrativo */}
+          {/* Left Panel: Portal de Acceso para Tiendas */}
           <section
             aria-labelledby="auth-portal-title"
             className="lg:col-span-6 rounded-2xl border border-cyan-500/25 bg-[#0A1124]/95 backdrop-blur-md p-6 sm:p-8 flex flex-col justify-between shadow-2xl"
@@ -230,7 +253,7 @@ export function AuthLoginView({
                   Leps Commerce
                 </h1>
                 <p className="text-sm text-slate-300 mt-1">
-                  Portal de Acceso Administrativo
+                  Portal de Acceso para Tiendas
                 </p>
               </div>
 
@@ -263,7 +286,7 @@ export function AuthLoginView({
                 </span>
               </button>
               <p className="text-[11px] text-center text-cyan-300/80 mb-5">
-                Inicia sesión o crea tu cuenta nueva en la nube con un clic
+                Acceso seguro para tiendas y cuenta administrativa con Google
               </p>
 
               <div className="relative flex items-center justify-center mb-5">
@@ -420,7 +443,7 @@ export function AuthLoginView({
                 onClick={handleDemoQuickAccess}
                 className="w-full min-h-[44px] px-4 py-2.5 rounded-xl border border-cyan-400/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-200 text-xs sm:text-sm font-semibold transition-colors"
               >
-                Entrar con Cuenta Demo ({DEFAULT_DEMO_USER.email})
+                Probar Tienda Demo ({DEFAULT_DEMO_USER.email})
               </button>
               <p className="text-[11px] text-center text-slate-400 font-mono">
                 Demo: {DEFAULT_DEMO_USER.email} · Clave: {DEFAULT_DEMO_USER.password}

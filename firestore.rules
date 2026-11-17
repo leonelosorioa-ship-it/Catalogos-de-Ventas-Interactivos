@@ -27,6 +27,15 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isVerifiedAdminToken() {
+      return isVerifiedUser() && request.auth.token.email == 'agencialeps@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedAdminToken() ||
+        (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
@@ -124,7 +133,7 @@ service cloud.firestore {
         isValidId(data.id) &&
         data.id == catalogId &&
         isValidId(data.ownerUid) &&
-        data.ownerUid == request.auth.uid &&
+        (data.ownerUid == request.auth.uid || isAdmin()) &&
         data.nombre is string &&
         data.nombre.size() >= 1 &&
         data.nombre.size() <= 120 &&
@@ -143,7 +152,7 @@ service cloud.firestore {
         data.isPro is bool &&
         data.isPublic is bool &&
         data.logoUrl is string &&
-        data.logoUrl.size() <= 2048 &&
+        data.logoUrl.size() <= 180000 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -184,7 +193,7 @@ service cloud.firestore {
         isValidId(data.catalogId) &&
         data.catalogId == catalogId &&
         isValidId(data.ownerUid) &&
-        data.ownerUid == request.auth.uid &&
+        (data.ownerUid == request.auth.uid || isAdmin()) &&
         data.isPublic is bool &&
         isNumeric(data.sortOrder) &&
         data.sortOrder >= 0 &&
@@ -204,7 +213,7 @@ service cloud.firestore {
         data.descripcion is string &&
         data.descripcion.size() <= 600 &&
         data.imagen is string &&
-        data.imagen.size() <= 2048 &&
+        data.imagen.size() <= 180000 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -230,7 +239,7 @@ service cloud.firestore {
         data.slug == slugId &&
         isValidId(data.catalogId) &&
         isValidId(data.ownerUid) &&
-        data.ownerUid == request.auth.uid &&
+        (data.ownerUid == request.auth.uid || isAdmin()) &&
         data.isPublic is bool &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -240,10 +249,17 @@ service cloud.firestore {
     // Collection Rules
     // =========================================================
 
-    // 1. User Profiles (Strict PII Isolation - Owner Only)
-    match /users/{userId} {
-      allow get: if isValidId(userId) && isOwner(userId);
+    // 0. Platform Admins (Read-only lookup; cannot be self-assigned via client SDK)
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isVerifiedAdminToken());
       allow list: if false;
+      allow create, update, delete: if false;
+    }
+
+    // 1. User Profiles (Strict PII Isolation - Owner or Verified Platform Admin Only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isVerifiedAdminToken();
 
       allow create: if isVerifiedUser() &&
         isValidId(userId) &&
@@ -267,15 +283,17 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 2. Storefront Catalogs (Zero PII)
+    // 2. Storefront Catalogs (Zero PII, Full Platform Admin Management)
     match /catalogs/{catalogId} {
       allow get: if isValidId(catalogId) && (
         resource == null ||
         existing().isPublic == true ||
-        (isSignedIn() && existing().ownerUid == request.auth.uid)
+        (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+        isAdmin()
       );
 
-      allow list: if isSignedIn() && existing().ownerUid == request.auth.uid;
+      allow list: if (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+        isVerifiedAdminToken();
 
       allow create: if isVerifiedUser() &&
         isValidId(catalogId) &&
@@ -285,7 +303,7 @@ service cloud.firestore {
 
       allow update: if isVerifiedUser() &&
         isValidId(catalogId) &&
-        existing().ownerUid == request.auth.uid &&
+        (existing().ownerUid == request.auth.uid || isAdmin()) &&
         isValidCatalog(incoming(), catalogId) &&
         incoming().id == existing().id &&
         incoming().ownerUid == existing().ownerUid &&
@@ -326,20 +344,22 @@ service cloud.firestore {
 
       allow delete: if isVerifiedUser() &&
         isValidId(catalogId) &&
-        existing().ownerUid == request.auth.uid;
+        (existing().ownerUid == request.auth.uid || isAdmin());
 
-      // 3. Catalog Products Subcollection (Master Gate on Parent Catalog)
+      // 3. Catalog Products Subcollection (Master Gate on Parent Catalog + Admin Override)
       match /products/{productId} {
         allow get: if isValidId(catalogId) &&
           isValidId(productId) &&
           (
             resource == null ||
             existing().isPublic == true ||
-            (isSignedIn() && existing().ownerUid == request.auth.uid)
+            (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+            isAdmin()
           );
 
         allow list: if existing().isPublic == true ||
-          (isSignedIn() && existing().ownerUid == request.auth.uid);
+          (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+          isVerifiedAdminToken();
 
         allow create: if isVerifiedUser() &&
           isValidId(catalogId) &&
@@ -347,19 +367,25 @@ service cloud.firestore {
           isValidCatalogProduct(incoming(), catalogId) &&
           incoming().createdAt == request.time &&
           incoming().updatedAt == request.time &&
-          getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid;
+          (
+            getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid ||
+            isAdmin()
+          );
 
         allow update: if isVerifiedUser() &&
           isValidId(catalogId) &&
           isValidId(productId) &&
-          existing().ownerUid == request.auth.uid &&
+          (existing().ownerUid == request.auth.uid || isAdmin()) &&
           isValidCatalogProduct(incoming(), catalogId) &&
           incoming().id == existing().id &&
           incoming().catalogId == existing().catalogId &&
           incoming().ownerUid == existing().ownerUid &&
           incoming().createdAt == existing().createdAt &&
           incoming().updatedAt == request.time &&
-          getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid &&
+          (
+            getAfter(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid ||
+            isAdmin()
+          ) &&
           (
             // Action: Drag & Drop reorder
             incoming().diff(existing()).affectedKeys().hasOnly(['sortOrder', 'updatedAt']) ||
@@ -380,8 +406,11 @@ service cloud.firestore {
         allow delete: if isVerifiedUser() &&
           isValidId(catalogId) &&
           isValidId(productId) &&
-          existing().ownerUid == request.auth.uid &&
-          get(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid;
+          (existing().ownerUid == request.auth.uid || isAdmin()) &&
+          (
+            get(/databases/$(database)/documents/catalogs/$(catalogId)).data.ownerUid == request.auth.uid ||
+            isAdmin()
+          );
       }
     }
 
@@ -390,7 +419,8 @@ service cloud.firestore {
       allow get: if isValidSlugId(slugId) && (
         resource == null ||
         existing().isPublic == true ||
-        (isSignedIn() && existing().ownerUid == request.auth.uid)
+        (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+        isAdmin()
       );
       allow list: if false;
 
@@ -399,22 +429,28 @@ service cloud.firestore {
         isValidSlugLookup(incoming(), slugId) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
-        getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid;
+        (
+          getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid ||
+          isAdmin()
+        );
 
       allow update: if isVerifiedUser() &&
         isValidSlugId(slugId) &&
-        existing().ownerUid == request.auth.uid &&
+        (existing().ownerUid == request.auth.uid || isAdmin()) &&
         isValidSlugLookup(incoming(), slugId) &&
         incoming().slug == existing().slug &&
         incoming().ownerUid == existing().ownerUid &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid &&
+        (
+          getAfter(/databases/$(database)/documents/catalogs/$(incoming().catalogId)).data.ownerUid == request.auth.uid ||
+          isAdmin()
+        ) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['catalogId', 'isPublic', 'updatedAt']);
 
       allow delete: if isVerifiedUser() &&
         isValidSlugId(slugId) &&
-        existing().ownerUid == request.auth.uid;
+        (existing().ownerUid == request.auth.uid || isAdmin());
     }
   }
 }

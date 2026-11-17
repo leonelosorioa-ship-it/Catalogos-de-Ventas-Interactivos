@@ -2,7 +2,6 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Store, X } from 'lucide-react';
 import {
   DEFAULT_DOMAIN_BASE,
-  sanitizeDomainBase,
   sanitizeSubdomain,
   validateDomainConfig,
   type StoreTheme,
@@ -145,9 +144,12 @@ export function CreateCatalogModal({
               htmlFor="new-cat-subdomain"
               className="block text-xs font-semibold text-slate-700 mb-1.5"
             >
-              Identificador de tienda y dominio oficial
+              Enlace corto de tu tienda
             </label>
             <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
+              <span className="px-3 py-2.5 bg-slate-100 border-r border-slate-200 text-xs font-mono text-slate-500 shrink-0">
+                catalogos.{DEFAULT_DOMAIN_BASE}/
+              </span>
               <input
                 id="new-cat-subdomain"
                 type="text"
@@ -159,39 +161,14 @@ export function CreateCatalogModal({
                 placeholder="onix-joyeria"
                 className="flex-1 min-w-0 min-h-[44px] px-3 py-2 text-sm font-mono focus:outline-none"
               />
-              <span className="px-1.5 py-2 bg-slate-100 border-x border-slate-200 text-xs font-mono text-slate-500 shrink-0">
-                .
-              </span>
-              <input
-                id="new-cat-domain-base"
-                type="text"
-                value={dominioBase}
-                onChange={(e) => setDominioBase(sanitizeDomainBase(e.target.value))}
-                aria-label="Dominio oficial"
-                placeholder="aurentime.shop"
-                className="w-36 min-h-[44px] px-2.5 py-2 bg-slate-50 text-xs font-mono text-slate-800 focus:outline-none"
-              />
             </div>
-            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-              <div className="flex items-center gap-1.5">
-                <span>Dominio oficial:</span>
-                <button
-                  type="button"
-                  onClick={() => setDominioBase('aurentime.shop')}
-                  className={`font-mono px-1.5 py-0.5 rounded border transition-colors ${
-                    sanitizeDomainBase(dominioBase) === 'aurentime.shop'
-                      ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                  }`}
-                >
-                  .aurentime.shop
-                </button>
-              </div>
-              <span className="font-mono text-cyan-700 truncate">
-                catalogos.{sanitizeDomainBase(dominioBase)}/
+            <p className="mt-1.5 text-[11px] text-slate-500 truncate">
+              Enlace activo:{' '}
+              <span className="font-mono text-cyan-700">
+                https://catalogos.{DEFAULT_DOMAIN_BASE}/
                 {sanitizeSubdomain(subdominio || nombre || 'onix-joyeria')}
               </span>
-            </div>
+            </p>
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">

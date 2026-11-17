@@ -10,11 +10,13 @@ import {
 
 const rulesSource = fs.readFileSync('./firestore.rules', 'utf8');
 
-test('firestore.rules includes default-deny safety net and verified user gates', () => {
+test('firestore.rules includes default-deny safety net, verified user gates, and verified admin RBAC', () => {
   assert.match(rulesSource, /rules_version\s*=\s*'2'/);
   assert.match(rulesSource, /match \/\{document=\*\*\}[\s\S]*allow read, write: if false;/);
   assert.match(rulesSource, /request\.auth\.token\.email_verified == true/);
-  assert.match(rulesSource, /match \/users\/\{userId\}[\s\S]*allow list: if false;/);
+  assert.match(rulesSource, /function isVerifiedAdminToken\(\)[\s\S]*isVerifiedUser\(\)[\s\S]*agencialeps@gmail\.com/);
+  assert.match(rulesSource, /match \/admins\/\{adminId\}[\s\S]*allow create, update, delete: if false;/);
+  assert.match(rulesSource, /match \/users\/\{userId\}[\s\S]*allow list: if isVerifiedAdminToken\(\);/);
   assert.match(rulesSource, /match \/slugs\/\{slugId\}[\s\S]*allow list: if false;/);
   assert.match(rulesSource, /getAfter\(\/databases\/\$\(database\)\/documents\/catalogs\//);
 });
@@ -153,7 +155,17 @@ test('Dirty Dozen #10-12: CatalogProduct & CatalogSlugLookup reject negative pri
     true
   );
 
-  // Dirty Dozen #11: Negative price & 10KB image blob rejection
+  // Compressed uploaded image (< 180KB) is accepted
+  assert.equal(
+    validateBlueprintEntityPayload(
+      'CatalogProduct',
+      { ...validProduct, imagen: 'data:image/webp;base64,' + 'A'.repeat(40000) },
+      'uid-merchant-1'
+    ).valid,
+    true
+  );
+
+  // Dirty Dozen #11: Negative price & >180KB oversized image blob rejection
   assert.equal(
     validateBlueprintEntityPayload(
       'CatalogProduct',
@@ -165,7 +177,7 @@ test('Dirty Dozen #10-12: CatalogProduct & CatalogSlugLookup reject negative pri
   assert.equal(
     validateBlueprintEntityPayload(
       'CatalogProduct',
-      { ...validProduct, imagen: 'data:image/png;base64,' + 'A'.repeat(10000) },
+      { ...validProduct, imagen: 'data:image/png;base64,' + 'A'.repeat(200000) },
       'uid-merchant-1'
     ).valid,
     false

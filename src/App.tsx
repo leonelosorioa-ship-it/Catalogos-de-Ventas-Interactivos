@@ -2,26 +2,33 @@ import { useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import {
+  adminDeleteCatalogInFirestore,
+  adminSaveCatalogInFirestore,
   ensureUserProfileInFirestore,
+  fetchAllUsersAdminInFirestore,
   fetchPublicCatalogFromFirestore,
+  subscribeAllCatalogsAdminInFirestore,
   subscribeUserCatalogsInFirestore,
   syncCatalogsToFirestore,
+  type AdminCatalogWorkspace,
+  type AdminUserRecord,
 } from './lib/firestoreSync';
 import { AuthLoginView } from './components/AuthLoginView';
 import { CatalogView } from './components/CatalogView';
 import { DashboardView } from './components/DashboardView';
 import { LandingView } from './components/LandingView';
-import { ViewSwitcher } from './components/ViewSwitcher';
 import {
   DEFAULT_CATALOG_WORKSPACE,
   DEFAULT_DEMO_USER,
   DEFAULT_PRODUCTS,
   DEFAULT_STORE_CONFIG,
   LEGACY_STORAGE_KEYS,
+  PLATFORM_ADMIN_EMAIL,
   STORAGE_KEYS,
   createCatalogWorkspace,
   findCatalogBySlug,
   formatDirectStoreDisplay,
+  isVerifiedGoogleAdmin,
   loadPlatformDomainBase,
   migrateCatalogWorkspace,
   resolveRouteTarget,
@@ -47,7 +54,16 @@ function loadInitialUsers(): UserAccount[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      // Remove any legacy local admin placeholder so agencialeps@gmail.com only authenticates via Google
+      const sanitized = (parsed as UserAccount[]).filter(
+        (u) => u && u.email?.trim().toLowerCase() !== PLATFORM_ADMIN_EMAIL
+      );
+      const hasDemo = sanitized.some(
+        (u) => u.email?.trim().toLowerCase() === DEFAULT_DEMO_USER.email
+      );
+      const finalUsers = hasDemo ? sanitized : [DEFAULT_DEMO_USER, ...sanitized];
+      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(finalUsers));
+      return finalUsers;
     }
     return [DEFAULT_DEMO_USER];
   } catch {
@@ -61,7 +77,18 @@ function loadInitialSession(): UserAccount | null {
       localStorage.getItem(STORAGE_KEYS.SESSION) ||
       localStorage.getItem(LEGACY_STORAGE_KEYS.SESSION);
     if (!raw) return null;
-    return JSON.parse(raw) as UserAccount;
+    const parsed = JSON.parse(raw) as UserAccount;
+    if (!parsed || !parsed.email) return null;
+    // Never trust admin or google verification claims from localStorage alone; wait for Firebase Auth
+    if (parsed.email.trim().toLowerCase() === PLATFORM_ADMIN_EMAIL) {
+      return null;
+    }
+    return {
+      ...parsed,
+      role: 'merchant',
+      authProvider: 'local',
+      emailVerified: false,
+    };
   } catch {
     return null;
   }
@@ -147,6 +174,7 @@ function getInitialRouteTarget(): { view: ViewMode; catalogSlug: string | null }
 
 export default function App() {
   const [initialRoute] = useState(getInitialRouteTarget);
+  const [routeSlug, setRouteSlug] = useState<string | null>(initialRoute.catalogSlug);
   const [activeView, setActiveView] = useState<ViewMode>(initialRoute.view);
   const [users, setUsers] = useState<UserAccount[]>(loadInitialUsers);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(loadInitialSession);
@@ -169,20 +197,29 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [firebaseIdToken, setFirebaseIdToken] = useState<string | null>(null);
+  const [adminCatalogs, setAdminCatalogs] = useState<AdminCatalogWorkspace[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
   const [fatalFirestoreError, setFatalFirestoreError] = useState<Error | null>(null);
   const skipNextCloudSaveRef = useRef(false);
   const skipNextFirestoreSaveRef = useRef(false);
   const firestoreSeedAttemptedRef = useRef<string | null>(null);
   const hydratedFirestoreUidRef = useRef<string | null>(null);
+  const lastLocalEditAtRef = useRef<number>(0);
 
-  const localMatchedCatalog = initialRoute.catalogSlug
-    ? findCatalogBySlug(catalogs, initialRoute.catalogSlug)
+  const isAdmin = isVerifiedGoogleAdmin(currentUser);
+
+  const localMatchedCatalog = routeSlug
+    ? findCatalogBySlug(catalogs, routeSlug)
     : undefined;
 
+  const adminMatchedCatalog =
+    isAdmin && routeSlug ? findCatalogBySlug(adminCatalogs, routeSlug) : undefined;
+
   const activeCatalog =
-    (activeView === 'catalog' && localMatchedCatalog) ||
+    (activeView === 'catalog' && (localMatchedCatalog || adminMatchedCatalog)) ||
     (activeView === 'catalog' && remotePublicCatalog) ||
     catalogs.find((c) => c.id === activeCatalogId) ||
+    (isAdmin ? adminCatalogs.find((c) => c.id === activeCatalogId) : undefined) ||
     catalogs[0] ||
     DEFAULT_CATALOG_WORKSPACE;
 
@@ -245,6 +282,8 @@ export default function App() {
       setFirebaseUser(fbUser);
       if (!fbUser) {
         setFirebaseIdToken(null);
+        setAdminCatalogs([]);
+        setAdminUsers([]);
         firestoreSeedAttemptedRef.current = null;
         hydratedFirestoreUidRef.current = null;
         return;
@@ -252,6 +291,9 @@ export default function App() {
       try {
         const token = await fbUser.getIdToken();
         setFirebaseIdToken(token);
+        const cleanEmail = (fbUser.email || '').trim().toLowerCase();
+        const isGoogleAdmin =
+          cleanEmail === PLATFORM_ADMIN_EMAIL && fbUser.emailVerified === true;
         setCurrentUser({
           id: fbUser.uid,
           name:
@@ -259,6 +301,9 @@ export default function App() {
           email: fbUser.email || '',
           password: '',
           createdAt: new Date().toISOString(),
+          role: isGoogleAdmin ? 'admin' : 'merchant',
+          authProvider: 'google',
+          emailVerified: fbUser.emailVerified,
         });
         await syncWithCloudAccount(token, catalogs, platformDomain);
         if (fbUser.emailVerified) {
@@ -291,6 +336,11 @@ export default function App() {
       firebaseUser.email || '',
       (fsCatalogs) => {
         if (fsCatalogs.length > 0) {
+          const isInitialHydration = hydratedFirestoreUidRef.current !== firebaseUser.uid;
+          // Ignore echoes emitted while local edits are being saved/debounced
+          if (!isInitialHydration && Date.now() - lastLocalEditAtRef.current < 2500) {
+            return;
+          }
           hydratedFirestoreUidRef.current = firebaseUser.uid;
           skipNextFirestoreSaveRef.current = true;
           setCatalogs(fsCatalogs);
@@ -323,6 +373,91 @@ export default function App() {
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthReady, firebaseUser?.uid, firebaseUser?.emailVerified]);
+
+  // Platform Admin (agencialeps@gmail.com via Google) cross-store & user overview subscription
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !firebaseUser.emailVerified || !isAdmin) {
+      setAdminCatalogs([]);
+      setAdminUsers([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadAdminOverview = async () => {
+      try {
+        const fsUsers = await fetchAllUsersAdminInFirestore(firebaseUser);
+        if (!cancelled && fsUsers.length > 0) {
+          setAdminUsers(fsUsers);
+        }
+      } catch (err) {
+        if (!cancelled && err instanceof Error && err.message.includes('"operationType"')) {
+          setFatalFirestoreError(err);
+        }
+      }
+
+      if (firebaseIdToken) {
+        try {
+          const res = await fetch('/api/admin/overview', {
+            headers: { Authorization: `Bearer ${firebaseIdToken}` },
+          });
+          if (res.ok) {
+            const data = (await res.json()) as {
+              users?: AdminUserRecord[];
+              catalogs?: Array<CatalogWorkspace & { ownerUid?: string }>;
+            };
+            if (!cancelled && Array.isArray(data.users) && data.users.length > 0) {
+              setAdminUsers((prev) => {
+                const map = new Map(prev.map((u) => [u.uid, u]));
+                for (const u of data.users!) {
+                  if (!map.has(u.uid)) map.set(u.uid, u);
+                }
+                return Array.from(map.values());
+              });
+            }
+            if (!cancelled && Array.isArray(data.catalogs) && data.catalogs.length > 0) {
+              setAdminCatalogs((prev) => {
+                const map = new Map(prev.map((c) => [c.id, c]));
+                for (const c of data.catalogs!) {
+                  if (!map.has(c.id)) {
+                    map.set(c.id, {
+                      ...migrateCatalogWorkspace(c),
+                      ownerUid: c.ownerUid || firebaseUser.uid,
+                    });
+                  }
+                }
+                return Array.from(map.values());
+              });
+            }
+          }
+        } catch {
+          // Postgres optional locally; Firestore admin snapshot remains primary
+        }
+      }
+    };
+
+    void loadAdminOverview();
+
+    const unsubAdmin = subscribeAllCatalogsAdminInFirestore(
+      firebaseUser,
+      (fsAdminCatalogs) => {
+        if (cancelled) return;
+        setAdminCatalogs((prev) => {
+          const extraSql = prev.filter(
+            (p) =>
+              !fsAdminCatalogs.some((f) => f.id === p.id) &&
+              p.ownerUid !== firebaseUser.uid
+          );
+          return [...fsAdminCatalogs, ...extraSql];
+        });
+      }
+    );
+
+    return () => {
+      cancelled = true;
+      unsubAdmin();
+    };
+  }, [isAuthReady, firebaseUser, firebaseIdToken, isAdmin]);
 
   useEffect(() => {
     if (!initialRoute.catalogSlug || localMatchedCatalog) return;
@@ -385,51 +520,58 @@ export default function App() {
     } catch {
       // ignore
     }
-    fetch('/api/public/catalogs/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ catalogs }),
-    }).catch(() => {
-      // ignore background sync failure when offline
-    });
 
-    if (firebaseIdToken) {
-      if (skipNextCloudSaveRef.current) {
-        skipNextCloudSaveRef.current = false;
-      } else {
-        fetch('/api/catalogs', {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${firebaseIdToken}`,
-          },
-          body: JSON.stringify({ catalogs, platformDomain }),
-        }).catch(() => {
-          // ignore transient network failure
-        });
-      }
-    }
+    const syncTimer = window.setTimeout(() => {
+      fetch('/api/public/catalogs/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ catalogs }),
+      }).catch(() => {
+        // ignore background sync failure when offline
+      });
 
-    if (
-      firebaseUser &&
-      firebaseUser.emailVerified &&
-      hydratedFirestoreUidRef.current === firebaseUser.uid
-    ) {
-      if (skipNextFirestoreSaveRef.current) {
-        skipNextFirestoreSaveRef.current = false;
-      } else {
-        void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain)
-          .then((result) => {
-            if (result.idsUpdated) {
-              skipNextFirestoreSaveRef.current = true;
-              setCatalogs(result.catalogs);
-            }
-          })
-          .catch((err) => {
-            if (err instanceof Error) setFatalFirestoreError(err);
+      if (firebaseIdToken) {
+        if (skipNextCloudSaveRef.current) {
+          skipNextCloudSaveRef.current = false;
+        } else {
+          fetch('/api/catalogs', {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${firebaseIdToken}`,
+            },
+            body: JSON.stringify({ catalogs, platformDomain }),
+          }).catch(() => {
+            // ignore transient network failure
           });
+        }
       }
-    }
+
+      if (
+        firebaseUser &&
+        firebaseUser.emailVerified &&
+        hydratedFirestoreUidRef.current === firebaseUser.uid
+      ) {
+        if (skipNextFirestoreSaveRef.current) {
+          skipNextFirestoreSaveRef.current = false;
+        } else {
+          lastLocalEditAtRef.current = Date.now();
+          void syncCatalogsToFirestore(firebaseUser, catalogs, platformDomain)
+            .then((result) => {
+              lastLocalEditAtRef.current = Date.now();
+              if (result.idsUpdated) {
+                skipNextFirestoreSaveRef.current = true;
+                setCatalogs(result.catalogs);
+              }
+            })
+            .catch((err) => {
+              if (err instanceof Error) setFatalFirestoreError(err);
+            });
+        }
+      }
+    }, 550);
+
+    return () => window.clearTimeout(syncTimer);
   }, [catalogs, firebaseIdToken, firebaseUser, platformDomain]);
 
   useEffect(() => {
@@ -467,20 +609,27 @@ export default function App() {
     uid,
     email,
     name,
+    emailVerified,
     idToken,
   }: {
     uid: string;
     email: string;
     name: string;
+    emailVerified: boolean;
     idToken: string;
   }) => {
     setFirebaseIdToken(idToken);
+    const isGoogleAdmin =
+      email.trim().toLowerCase() === PLATFORM_ADMIN_EMAIL && emailVerified === true;
     setCurrentUser({
       id: uid,
       name,
       email,
       password: '',
       createdAt: new Date().toISOString(),
+      role: isGoogleAdmin ? 'admin' : 'merchant',
+      authProvider: 'google',
+      emailVerified,
     });
     await syncWithCloudAccount(idToken, catalogs, platformDomain);
     setActiveView('dashboard');
@@ -496,15 +645,43 @@ export default function App() {
 
   const handleLogout = () => {
     setFirebaseIdToken(null);
+    setAdminCatalogs([]);
+    setAdminUsers([]);
     signOut(auth).catch(() => {});
     setCurrentUser(null);
     setActiveView('login');
   };
 
   const handleSelectCatalog = (catalogId: string) => {
+    setRouteSlug(null);
     if (catalogId !== activeCatalogId) {
       setActiveCatalogId(catalogId);
       setCart([]);
+    }
+  };
+
+  const persistAdminCatalogMutation = (updated: AdminCatalogWorkspace) => {
+    fetch('/api/public/catalogs/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ catalogs: [updated] }),
+    }).catch(() => {});
+
+    if (firebaseUser && firebaseUser.emailVerified) {
+      void adminSaveCatalogInFirestore(firebaseUser, updated).catch((err) => {
+        if (err instanceof Error) setFatalFirestoreError(err);
+      });
+    }
+
+    if (firebaseIdToken) {
+      fetch(`/api/admin/catalogs/${encodeURIComponent(updated.id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${firebaseIdToken}`,
+        },
+        body: JSON.stringify({ catalog: updated }),
+      }).catch(() => {});
     }
   };
 
@@ -516,14 +693,36 @@ export default function App() {
     tema: StoreTheme;
     descripcion: string;
   }) => {
+    lastLocalEditAtRef.current = Date.now();
+    setRouteSlug(null);
     const owner = currentUser?.email || DEFAULT_DEMO_USER.email;
-    const created = createCatalogWorkspace(owner, input, catalogs);
+    const collisionPool = isAdmin ? [...catalogs, ...adminCatalogs] : catalogs;
+    const created = createCatalogWorkspace(owner, input, collisionPool);
     setCatalogs((prev) => [created, ...prev]);
     setActiveCatalogId(created.id);
     setCart([]);
+
+    if (isAdmin && firebaseUser) {
+      const adminEntry: AdminCatalogWorkspace = {
+        ...created,
+        ownerUid: firebaseUser.uid,
+      };
+      setAdminCatalogs((prev) => [adminEntry, ...prev.filter((c) => c.id !== created.id)]);
+      if (firebaseIdToken) {
+        fetch('/api/admin/catalogs', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${firebaseIdToken}`,
+          },
+          body: JSON.stringify({ catalog: adminEntry }),
+        }).catch(() => {});
+      }
+    }
   };
 
   const handleDeleteCatalog = (catalogId: string) => {
+    lastLocalEditAtRef.current = Date.now();
     setCatalogs((prev) => {
       if (prev.length <= 1) return prev;
       const remaining = prev.filter((c) => c.id !== catalogId);
@@ -533,16 +732,76 @@ export default function App() {
       }
       return remaining;
     });
+    if (isAdmin) {
+      setAdminCatalogs((prev) => prev.filter((c) => c.id !== catalogId));
+    }
+  };
+
+  const handleAdminDeleteCatalog = (catalogId: string) => {
+    if (!isAdmin) return;
+    lastLocalEditAtRef.current = Date.now();
+    const isOwn = catalogs.some((c) => c.id === catalogId);
+    if (isOwn && catalogs.length > 1) {
+      setCatalogs((prev) => prev.filter((c) => c.id !== catalogId));
+    }
+    setAdminCatalogs((prev) => prev.filter((c) => c.id !== catalogId));
+    if (activeCatalogId === catalogId) {
+      const nextFallback =
+        catalogs.find((c) => c.id !== catalogId)?.id ||
+        catalogs[0]?.id ||
+        DEFAULT_CATALOG_WORKSPACE.id;
+      setActiveCatalogId(nextFallback);
+      setCart([]);
+    }
+
+    if (firebaseUser && firebaseUser.emailVerified) {
+      void adminDeleteCatalogInFirestore(firebaseUser, catalogId).catch((err) => {
+        if (err instanceof Error) setFatalFirestoreError(err);
+      });
+    }
+    if (firebaseIdToken) {
+      fetch(`/api/admin/catalogs/${encodeURIComponent(catalogId)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${firebaseIdToken}` },
+      }).catch(() => {});
+    }
   };
 
   const handleUpdateConfig = (nextConfig: StoreConfig) => {
-    setCatalogs((prev) =>
-      prev.map((c) =>
-        c.id === activeCatalog.id
-          ? { ...c, config: nextConfig, updatedAt: new Date().toISOString() }
-          : c
-      )
-    );
+    lastLocalEditAtRef.current = Date.now();
+    const isOwned = catalogs.some((c) => c.id === activeCatalog.id);
+    if (isOwned) {
+      setCatalogs((prev) =>
+        prev.map((c) =>
+          c.id === activeCatalog.id
+            ? { ...c, config: nextConfig, updatedAt: new Date().toISOString() }
+            : c
+        )
+      );
+      if (isAdmin) {
+        setAdminCatalogs((prev) =>
+          prev.map((c) =>
+            c.id === activeCatalog.id
+              ? { ...c, config: nextConfig, updatedAt: new Date().toISOString() }
+              : c
+          )
+        );
+      }
+      return;
+    }
+
+    if (isAdmin) {
+      const target = adminCatalogs.find((c) => c.id === activeCatalog.id);
+      if (target) {
+        const updated: AdminCatalogWorkspace = {
+          ...target,
+          config: nextConfig,
+          updatedAt: new Date().toISOString(),
+        };
+        setAdminCatalogs((prev) => prev.map((c) => (c.id === target.id ? updated : c)));
+        persistAdminCatalogMutation(updated);
+      }
+    }
   };
 
   const handleSaveCustomDomain = ({
@@ -554,49 +813,112 @@ export default function App() {
     dominioBase: string;
     applyToAllCatalogs: boolean;
   }) => {
+    lastLocalEditAtRef.current = Date.now();
     const saved = savePlatformDomainBase(dominioBase);
     const nextDomain = saved.valid ? saved.normalized : platformDomain;
-    setPlatformDomain(nextDomain);
+    const isOwned = catalogs.some((c) => c.id === activeCatalog.id);
 
-    setCatalogs((prev) =>
-      prev.map((c) => {
-        if (c.id === activeCatalog.id) {
-          return {
-            ...c,
-            config: {
-              ...c.config,
-              subdominio,
-              dominioBase: nextDomain,
-            },
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        if (applyToAllCatalogs) {
-          return {
-            ...c,
-            config: {
-              ...c.config,
-              dominioBase: nextDomain,
-            },
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return c;
-      })
-    );
+    if (isOwned) {
+      setPlatformDomain(nextDomain);
+      setCatalogs((prev) =>
+        prev.map((c) => {
+          if (c.id === activeCatalog.id) {
+            return {
+              ...c,
+              config: {
+                ...c.config,
+                subdominio,
+                dominioBase: nextDomain,
+              },
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          if (applyToAllCatalogs) {
+            return {
+              ...c,
+              config: {
+                ...c.config,
+                dominioBase: nextDomain,
+              },
+              updatedAt: new Date().toISOString(),
+            };
+          }
+          return c;
+        })
+      );
+      if (isAdmin) {
+        setAdminCatalogs((prev) =>
+          prev.map((c) =>
+            c.id === activeCatalog.id
+              ? {
+                  ...c,
+                  config: { ...c.config, subdominio, dominioBase: nextDomain },
+                  updatedAt: new Date().toISOString(),
+                }
+              : c
+          )
+        );
+      }
+      return;
+    }
+
+    if (isAdmin) {
+      const target = adminCatalogs.find((c) => c.id === activeCatalog.id);
+      if (target) {
+        const updated: AdminCatalogWorkspace = {
+          ...target,
+          config: {
+            ...target.config,
+            subdominio,
+            dominioBase: nextDomain,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        setAdminCatalogs((prev) => prev.map((c) => (c.id === target.id ? updated : c)));
+        persistAdminCatalogMutation(updated);
+      }
+    }
   };
 
   const handleUpdateProducts = (nextProducts: Product[]) => {
-    setCatalogs((prev) =>
-      prev.map((c) =>
-        c.id === activeCatalog.id
-          ? { ...c, products: nextProducts, updatedAt: new Date().toISOString() }
-          : c
-      )
-    );
+    lastLocalEditAtRef.current = Date.now();
+    const isOwned = catalogs.some((c) => c.id === activeCatalog.id);
+    if (isOwned) {
+      setCatalogs((prev) =>
+        prev.map((c) =>
+          c.id === activeCatalog.id
+            ? { ...c, products: nextProducts, updatedAt: new Date().toISOString() }
+            : c
+        )
+      );
+      if (isAdmin) {
+        setAdminCatalogs((prev) =>
+          prev.map((c) =>
+            c.id === activeCatalog.id
+              ? { ...c, products: nextProducts, updatedAt: new Date().toISOString() }
+              : c
+          )
+        );
+      }
+      return;
+    }
+
+    if (isAdmin) {
+      const target = adminCatalogs.find((c) => c.id === activeCatalog.id);
+      if (target) {
+        const updated: AdminCatalogWorkspace = {
+          ...target,
+          products: nextProducts,
+          updatedAt: new Date().toISOString(),
+        };
+        setAdminCatalogs((prev) => prev.map((c) => (c.id === target.id ? updated : c)));
+        persistAdminCatalogMutation(updated);
+      }
+    }
   };
 
   const handleResetDemo = () => {
+    lastLocalEditAtRef.current = Date.now();
     setCatalogs((prev) =>
       prev.map((c) =>
         c.id === activeCatalog.id
@@ -679,9 +1001,13 @@ export default function App() {
           catalogs={catalogs}
           activeCatalog={activeCatalog}
           platformDomain={platformDomain}
+          isAdmin={isAdmin}
+          adminCatalogs={adminCatalogs}
+          adminUsers={adminUsers}
           onSelectCatalog={handleSelectCatalog}
           onCreateCatalog={handleCreateCatalog}
           onDeleteCatalog={handleDeleteCatalog}
+          onAdminDeleteCatalog={handleAdminDeleteCatalog}
           onUpdateConfig={handleUpdateConfig}
           onSaveCustomDomain={handleSaveCustomDomain}
           onUpdateProducts={handleUpdateProducts}
@@ -703,10 +1029,9 @@ export default function App() {
           onUpdateCartQty={handleUpdateCartQty}
           onClearCart={handleClearCart}
           onOpenAdmin={() => handleNavigate('dashboard')}
+          isMerchantLoggedIn={Boolean(currentUser)}
         />
       )}
-
-      <ViewSwitcher activeView={effectiveView} onChangeView={handleNavigate} />
     </div>
   );
 }

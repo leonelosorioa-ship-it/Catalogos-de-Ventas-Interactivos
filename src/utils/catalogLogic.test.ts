@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_CATALOG_WORKSPACE,
+  DEFAULT_DEMO_USER,
   DEFAULT_DOMAIN_BASE,
   DEFAULT_PRODUCTS,
   DEFAULT_STORE_CONFIG,
   DEFAULT_TEMPLATE_BIO,
+  PLATFORM_ADMIN_EMAIL,
   buildWhatsAppOrderUrl,
   calculateDiscountPercent,
   createCatalogWorkspace,
@@ -16,6 +18,7 @@ import {
   formatDirectStoreUrl,
   formatStoreUrl,
   isTemplateBioWarning,
+  isVerifiedGoogleAdmin,
   loadPlatformDomainBase,
   migrateCatalogWorkspace,
   parseBulkCatalogText,
@@ -365,3 +368,82 @@ test('resolveRouteTarget resolves subdomain hosts, portal host, query params, an
     DEFAULT_CATALOG_WORKSPACE.id
   );
 });
+
+test('blueprintConstraints preserves compressed logo data URLs up to 180KB', async () => {
+  const { BLUEPRINT_LIMITS, sanitizeCatalogForFirestore } = await import(
+    '../lib/blueprintConstraints'
+  );
+  assert.ok(BLUEPRINT_LIMITS.catalog.logoUrlMax >= 180000);
+  const sampleLogo = `data:image/webp;base64,${'A'.repeat(12000)}`;
+  const sanitized = sanitizeCatalogForFirestore(
+    {
+      ...DEFAULT_CATALOG_WORKSPACE,
+      config: {
+        ...DEFAULT_STORE_CONFIG,
+        logoUrl: sampleLogo,
+      },
+    },
+    'test-uid-123'
+  );
+  assert.equal(sanitized.logoUrl, sampleLogo);
+});
+
+test('isVerifiedGoogleAdmin grants admin access strictly to verified Google login for agencialeps@gmail.com', () => {
+  assert.equal(PLATFORM_ADMIN_EMAIL, 'agencialeps@gmail.com');
+  assert.equal(DEFAULT_DEMO_USER.email, 'demo@aurentime.shop');
+  assert.equal(DEFAULT_DEMO_USER.role, 'merchant');
+  assert.equal(isVerifiedGoogleAdmin(DEFAULT_DEMO_USER), false);
+
+  assert.equal(
+    isVerifiedGoogleAdmin({
+      email: 'agencialeps@gmail.com',
+      role: 'admin',
+      authProvider: 'google',
+      emailVerified: true,
+    }),
+    true
+  );
+
+  assert.equal(
+    isVerifiedGoogleAdmin({
+      email: 'AgenciaLeps@gmail.com ',
+      role: 'admin',
+      authProvider: 'google',
+      emailVerified: true,
+    }),
+    true
+  );
+
+  // Reject unverified email or local login spoofing
+  assert.equal(
+    isVerifiedGoogleAdmin({
+      email: 'agencialeps@gmail.com',
+      role: 'admin',
+      authProvider: 'local',
+      emailVerified: true,
+    }),
+    false
+  );
+  assert.equal(
+    isVerifiedGoogleAdmin({
+      email: 'agencialeps@gmail.com',
+      role: 'admin',
+      authProvider: 'google',
+      emailVerified: false,
+    }),
+    false
+  );
+
+  // Reject client Google merchant accounts
+  assert.equal(
+    isVerifiedGoogleAdmin({
+      email: 'aurentimescolombia@gmail.com',
+      role: 'merchant',
+      authProvider: 'google',
+      emailVerified: true,
+    }),
+    false
+  );
+  assert.equal(isVerifiedGoogleAdmin(null), false);
+});
+

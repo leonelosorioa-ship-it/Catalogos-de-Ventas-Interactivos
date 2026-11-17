@@ -28,12 +28,31 @@ export interface CartItem {
   quantity: number;
 }
 
+export type UserRole = 'admin' | 'merchant';
+export type AuthProviderKind = 'google' | 'local';
+
 export interface UserAccount {
   id: string;
   name: string;
   email: string;
   password: string;
   createdAt: string;
+  role?: UserRole;
+  authProvider?: AuthProviderKind;
+  emailVerified?: boolean;
+}
+
+export const PLATFORM_ADMIN_EMAIL = 'agencialeps@gmail.com';
+
+export function isVerifiedGoogleAdmin(
+  user: Pick<UserAccount, 'email' | 'role' | 'authProvider' | 'emailVerified'> | null | undefined
+): boolean {
+  if (!user) return false;
+  return (
+    user.email.trim().toLowerCase() === PLATFORM_ADMIN_EMAIL &&
+    user.authProvider === 'google' &&
+    user.emailVerified === true
+  );
 }
 
 export interface CatalogWorkspace {
@@ -80,10 +99,12 @@ export const RECOMMENDED_BIO_EXAMPLE =
 
 export const DEFAULT_DEMO_USER: UserAccount = {
   id: 'usr-demo-leps',
-  name: 'Administrador Leps',
-  email: 'agencialeps@gmail.com',
-  password: 'leps2026',
+  name: 'Tienda Demo Auren Time',
+  email: 'demo@aurentime.shop',
+  password: 'demo2026',
   createdAt: '2026-01-01T00:00:00.000Z',
+  role: 'merchant',
+  authProvider: 'local',
 };
 
 export const DEFAULT_DOMAIN_BASE = 'aurentime.shop';

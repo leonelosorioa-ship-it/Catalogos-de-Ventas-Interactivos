@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -17,8 +17,10 @@ import {
   RotateCcw,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Trash2,
+  Users,
 } from 'lucide-react';
 import {
   DEFAULT_DOMAIN_BASE,
@@ -27,9 +29,9 @@ import {
   extractUniqueCategories,
   formatCOP,
   formatDirectStoreDisplay,
-  formatStoreUrl,
   getAverageDiscountPercent,
   isTemplateBioWarning,
+  isVerifiedGoogleAdmin,
   RECOMMENDED_BIO_EXAMPLE,
   reorderProducts,
   validateDomainConfig,
@@ -39,6 +41,8 @@ import {
   type StoreTheme,
   type UserAccount,
 } from '../utils/catalogLogic';
+import type { AdminCatalogWorkspace, AdminUserRecord } from '../lib/firestoreSync';
+import { compressImageFileToDataUrl } from '../utils/imageUpload';
 import { CreateCatalogModal } from './CreateCatalogModal';
 import { MagicImportModal } from './MagicImportModal';
 
@@ -47,6 +51,9 @@ interface DashboardViewProps {
   catalogs: CatalogWorkspace[];
   activeCatalog: CatalogWorkspace;
   platformDomain: string;
+  isAdmin?: boolean;
+  adminCatalogs?: AdminCatalogWorkspace[];
+  adminUsers?: AdminUserRecord[];
   onSelectCatalog: (catalogId: string) => void;
   onCreateCatalog: (input: {
     nombre: string;
@@ -57,6 +64,7 @@ interface DashboardViewProps {
     descripcion: string;
   }) => void;
   onDeleteCatalog: (catalogId: string) => void;
+  onAdminDeleteCatalog?: (catalogId: string) => void;
   onUpdateConfig: (next: StoreConfig) => void;
   onSaveCustomDomain: (input: {
     subdominio: string;
@@ -69,7 +77,7 @@ interface DashboardViewProps {
   onLogout: () => void;
 }
 
-type DashboardTab = 'catalogs' | 'inventory' | 'config';
+type DashboardTab = 'catalogs' | 'inventory' | 'config' | 'admin';
 
 const EMPTY_FORM = {
   nombre: '',
@@ -118,9 +126,13 @@ export function DashboardView({
   catalogs,
   activeCatalog,
   platformDomain,
+  isAdmin = false,
+  adminCatalogs = [],
+  adminUsers = [],
   onSelectCatalog,
   onCreateCatalog,
   onDeleteCatalog,
+  onAdminDeleteCatalog,
   onUpdateConfig,
   onSaveCustomDomain,
   onUpdateProducts,
@@ -133,6 +145,8 @@ export function DashboardView({
 
   const [activeTab, setActiveTab] = useState<DashboardTab>('catalogs');
   const [searchQuery, setSearchQuery] = useState('');
+  const [adminSearchQuery, setAdminSearchQuery] = useState('');
+  const [confirmDeleteAdminId, setConfirmDeleteAdminId] = useState<string | null>(null);
   const [isMagicModalOpen, setIsMagicModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
@@ -143,22 +157,91 @@ export function DashboardView({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
 
-  // Custom Domain section state
+  const isPlatformAdmin = Boolean(isAdmin) && isVerifiedGoogleAdmin(currentUser);
+
+  // Store short-link section state
   const [draftSubdomain, setDraftSubdomain] = useState(storeConfig.subdominio);
-  const [draftDomainBase, setDraftDomainBase] = useState(
-    storeConfig.dominioBase || platformDomain || DEFAULT_DOMAIN_BASE
-  );
-  const [applyDomainToAll, setApplyDomainToAll] = useState(false);
   const [domainFormError, setDomainFormError] = useState<string | null>(null);
   const [domainCopied, setDomainCopied] = useState(false);
 
+  // Store brand & WhatsApp local drafts (prevents Firestore/keystroke snap-back while typing)
+  const [draftStoreName, setDraftStoreName] = useState(storeConfig.nombre);
+  const [draftWhatsapp, setDraftWhatsapp] = useState(storeConfig.whatsapp);
+  const [draftBio, setDraftBio] = useState(storeConfig.descripcion);
+  const [brandFormError, setBrandFormError] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const lastBrandInputAtRef = useRef<number>(0);
+  const feedbackTimerRef = useRef<number | null>(null);
+  const latestStoreConfigRef = useRef(storeConfig);
+  latestStoreConfigRef.current = storeConfig;
+
   useEffect(() => {
     setDraftSubdomain(storeConfig.subdominio);
-    setDraftDomainBase(storeConfig.dominioBase || platformDomain || DEFAULT_DOMAIN_BASE);
     setDomainFormError(null);
-  }, [activeCatalog.id, storeConfig.subdominio, storeConfig.dominioBase, platformDomain]);
+  }, [activeCatalog.id, storeConfig.subdominio]);
 
-  const showBioWarning = isTemplateBioWarning(storeConfig.descripcion);
+  useEffect(() => {
+    lastBrandInputAtRef.current = 0;
+    setDraftStoreName(storeConfig.nombre);
+    setDraftWhatsapp(storeConfig.whatsapp);
+    setDraftBio(storeConfig.descripcion);
+    setBrandFormError(null);
+    setLogoError(null);
+    // Intentionally reset draft inputs when switching to a different catalog
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCatalog.id]);
+
+  // Keep local drafts synchronized on initial cloud hydration or demo reset without overriding active typing
+  useEffect(() => {
+    if (Date.now() - lastBrandInputAtRef.current < 1500) return;
+    setDraftStoreName(storeConfig.nombre);
+    setDraftWhatsapp(storeConfig.whatsapp);
+    setDraftBio(storeConfig.descripcion);
+  }, [storeConfig.nombre, storeConfig.whatsapp, storeConfig.descripcion]);
+
+  const flushValidBrandChanges = () => {
+    const cleanName = draftStoreName.trim();
+    const digits = draftWhatsapp.replace(/\D/g, '');
+    const unchanged =
+      cleanName === storeConfig.nombre &&
+      digits === storeConfig.whatsapp &&
+      draftBio === storeConfig.descripcion;
+    if (unchanged) return;
+    if (cleanName.length < 2 || digits.length < 7 || digits.length > 20) return;
+
+    onUpdateConfig({
+      ...storeConfig,
+      nombre: cleanName,
+      whatsapp: digits,
+      descripcion: draftBio,
+    });
+  };
+
+  // Auto-save brand identity & WhatsApp only when valid and after a short typing pause
+  useEffect(() => {
+    const cleanName = draftStoreName.trim();
+    const digits = draftWhatsapp.replace(/\D/g, '');
+    const unchanged =
+      cleanName === storeConfig.nombre &&
+      digits === storeConfig.whatsapp &&
+      draftBio === storeConfig.descripcion;
+    if (unchanged) return;
+    if (cleanName.length < 2 || digits.length < 7 || digits.length > 20) return;
+
+    const timer = window.setTimeout(() => {
+      onUpdateConfig({
+        ...storeConfig,
+        nombre: cleanName,
+        whatsapp: digits,
+        descripcion: draftBio,
+      });
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [draftStoreName, draftWhatsapp, draftBio, storeConfig, onUpdateConfig]);
+
+  const showBioWarning = isTemplateBioWarning(draftBio);
   const avgDiscount = getAverageDiscountPercent(products);
   const categories = extractUniqueCategories(products);
 
@@ -174,34 +257,63 @@ export function DashboardView({
 
   const triggerFeedback = (msg: string) => {
     setSaveFeedback(msg);
-    setTimeout(() => setSaveFeedback(null), 2600);
+    if (feedbackTimerRef.current !== null) {
+      window.clearTimeout(feedbackTimerRef.current);
+    }
+    feedbackTimerRef.current = window.setTimeout(() => {
+      setSaveFeedback(null);
+      feedbackTimerRef.current = null;
+    }, 3000);
   };
 
-  const domainLiveCheck = validateDomainConfig(draftSubdomain, draftDomainBase);
-  const activeFullUrl = formatStoreUrl(storeConfig);
+  const activeDomainBase = storeConfig.dominioBase || platformDomain || DEFAULT_DOMAIN_BASE;
+  const domainLiveCheck = validateDomainConfig(draftSubdomain, activeDomainBase);
   const activeDirectDisplay = formatDirectStoreDisplay(storeConfig);
   const activeDirectLink =
     typeof window !== 'undefined'
       ? `${window.location.origin}/${encodeURIComponent(storeConfig.subdominio)}`
-      : `https://catalogos.${storeConfig.dominioBase || DEFAULT_DOMAIN_BASE}/${encodeURIComponent(storeConfig.subdominio)}`;
+      : `https://catalogos.${activeDomainBase}/${encodeURIComponent(storeConfig.subdominio)}`;
   const [directCopied, setDirectCopied] = useState(false);
 
   const handleSaveCustomDomainSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const check = validateDomainConfig(draftSubdomain, draftDomainBase);
+    const check = validateDomainConfig(draftSubdomain, activeDomainBase);
     if (!check.valid) {
       setDomainFormError(check.subdomainError || check.domainError);
       return;
     }
     setDomainFormError(null);
     setDraftSubdomain(check.subdominio);
-    setDraftDomainBase(check.dominioBase);
     onSaveCustomDomain({
       subdominio: check.subdominio,
-      dominioBase: check.dominioBase,
-      applyToAllCatalogs: applyDomainToAll,
+      dominioBase: DEFAULT_DOMAIN_BASE,
+      applyToAllCatalogs: false,
     });
     triggerFeedback(`Enlace público actualizado: /${check.subdominio}`);
+  };
+
+  const handleSaveBrandIdentity = () => {
+    const cleanName = draftStoreName.trim();
+    const digits = draftWhatsapp.replace(/\D/g, '');
+    if (cleanName.length < 2) {
+      setBrandFormError('Ingresa el nombre comercial de tu negocio (mínimo 2 caracteres).');
+      return;
+    }
+    if (digits.length < 7 || digits.length > 20) {
+      setBrandFormError(
+        'Ingresa un número de WhatsApp válido con código de país (entre 7 y 20 dígitos, ej. 573105551234).'
+      );
+      return;
+    }
+    setBrandFormError(null);
+    setDraftWhatsapp(digits);
+    onUpdateConfig({
+      ...storeConfig,
+      nombre: cleanName,
+      whatsapp: digits,
+      descripcion: draftBio,
+    });
+    triggerFeedback('Cambios de tienda y WhatsApp guardados');
   };
 
   const handleCopyPublicUrl = async () => {
@@ -224,29 +336,48 @@ export function DashboardView({
     setTimeout(() => setDirectCopied(false), 2000);
   };
 
-  const handleLogoUpload = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        onUpdateConfig({ ...storeConfig, logoUrl: reader.result });
-        triggerFeedback('Logotipo actualizado');
-      }
-    };
-    reader.readAsDataURL(file);
+    setLogoError(null);
+    setIsUploadingLogo(true);
+    try {
+      const compressedDataUrl = await compressImageFileToDataUrl(file, {
+        maxDimension: 320,
+        maxDataUrlLength: 150_000,
+      });
+      onUpdateConfig({ ...latestStoreConfigRef.current, logoUrl: compressedDataUrl });
+      triggerFeedback('Logotipo actualizado y guardado');
+    } catch (err) {
+      setLogoError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo cargar el logotipo. Intenta con otro archivo PNG o JPG.'
+      );
+    } finally {
+      setIsUploadingLogo(false);
+    }
   };
 
-  const handleProductImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleProductImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setFormState((prev) => ({ ...prev, imagen: reader.result as string }));
-      }
-    };
-    reader.readAsDataURL(file);
+    setFormError(null);
+    try {
+      const compressedDataUrl = await compressImageFileToDataUrl(file, {
+        maxDimension: 800,
+        maxDataUrlLength: 160_000,
+      });
+      setFormState((prev) => ({ ...prev, imagen: compressedDataUrl }));
+    } catch (err) {
+      setFormError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo procesar la foto seleccionada.'
+      );
+    }
   };
 
   const openNewProductForm = () => {
@@ -383,7 +514,43 @@ export function DashboardView({
       ? 'Mis Catálogos'
       : activeTab === 'inventory'
         ? 'Gestión de Inventario'
-        : 'Configuración de Tienda';
+        : activeTab === 'admin' && isPlatformAdmin
+          ? 'Administración de Plataforma'
+          : 'Configuración de Tienda';
+
+  const platformCatalogMap = new Map<string, AdminCatalogWorkspace>();
+  for (const cat of adminCatalogs) {
+    platformCatalogMap.set(cat.id, cat);
+  }
+  for (const cat of catalogs) {
+    const existing = platformCatalogMap.get(cat.id);
+    platformCatalogMap.set(cat.id, {
+      ...cat,
+      ownerUid: existing?.ownerUid || currentUser.id,
+    });
+  }
+  const allPlatformCatalogs = Array.from(platformCatalogMap.values());
+  const userByUid = new Map(adminUsers.map((u) => [u.uid, u]));
+  const totalPlatformProducts = allPlatformCatalogs.reduce(
+    (sum, cat) => sum + cat.products.length,
+    0
+  );
+  const filteredPlatformCatalogs = allPlatformCatalogs.filter((cat) => {
+    const q = adminSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const resolvedEmail =
+      (cat.ownerEmail && !cat.ownerEmail.startsWith('uid:')
+        ? cat.ownerEmail
+        : userByUid.get(cat.ownerUid)?.email || cat.ownerEmail) || '';
+    return (
+      cat.config.nombre.toLowerCase().includes(q) ||
+      cat.config.subdominio.toLowerCase().includes(q) ||
+      resolvedEmail.toLowerCase().includes(q)
+    );
+  });
+
+  const isManagingClientCatalog =
+    isPlatformAdmin && !catalogs.some((c) => c.id === activeCatalog.id);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col lg:flex-row pb-20 lg:pb-6">
@@ -400,7 +567,10 @@ export function DashboardView({
             <div className="flex items-center gap-2 lg:hidden">
               <button
                 type="button"
-                onClick={() => onOpenCatalog(activeCatalog.id)}
+                onClick={() => {
+                  flushValidBrandChanges();
+                  onOpenCatalog(activeCatalog.id);
+                }}
                 className="min-h-[38px] px-3 py-1.5 rounded-lg bg-cyan-500 text-slate-950 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
               >
                 <span>Ver tienda</span>
@@ -430,6 +600,11 @@ export function DashboardView({
               onChange={(e) => onSelectCatalog(e.target.value)}
               className="w-full min-h-[38px] px-2.5 py-1.5 rounded-lg bg-white/10 border border-white/15 text-xs font-semibold text-white focus:outline-none focus:border-cyan-400"
             >
+              {isManagingClientCatalog && (
+                <option value={activeCatalog.id} className="bg-slate-900 text-cyan-300">
+                  [Cliente] {activeCatalog.config.nombre} ({activeCatalog.products.length})
+                </option>
+              )}
               {catalogs.map((cat) => (
                 <option key={cat.id} value={cat.id} className="bg-slate-900 text-white">
                   {cat.config.nombre} ({cat.products.length})
@@ -441,7 +616,12 @@ export function DashboardView({
             </p>
           </div>
 
-          <nav aria-label="Secciones del panel" className="mt-5 grid grid-cols-3 lg:grid-cols-1 gap-1.5">
+          <nav
+            aria-label="Secciones del panel"
+            className={`mt-5 grid gap-1.5 lg:grid-cols-1 ${
+              isPlatformAdmin ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'
+            }`}
+          >
             <button
               type="button"
               onClick={() => setActiveTab('catalogs')}
@@ -478,17 +658,39 @@ export function DashboardView({
               <Settings className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>Configuración</span>
             </button>
+            {isPlatformAdmin && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('admin')}
+                className={`min-h-[42px] px-2.5 lg:px-3 py-2 rounded-lg text-xs lg:text-sm font-medium flex items-center justify-center lg:justify-start gap-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'admin'
+                    ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/35'
+                    : 'text-cyan-400/80 hover:text-cyan-200 hover:bg-white/5'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Panel Admin</span>
+              </button>
+            )}
           </nav>
         </div>
 
         <div className="hidden lg:block p-5 pb-20 border-t border-white/10 space-y-3">
           <div className="text-xs">
+            {isPlatformAdmin && (
+              <p className="text-[11px] font-semibold text-cyan-400 uppercase tracking-wider mb-1">
+                Cuenta Admin · Google
+              </p>
+            )}
             <p className="font-semibold text-white truncate">{currentUser.name}</p>
             <p className="text-slate-400 truncate">{currentUser.email}</p>
           </div>
           <button
             type="button"
-            onClick={() => onOpenCatalog(activeCatalog.id)}
+            onClick={() => {
+              flushValidBrandChanges();
+              onOpenCatalog(activeCatalog.id);
+            }}
             className="w-full min-h-[42px] px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
           >
             <span>Abrir Catálogo en Vivo</span>
@@ -557,8 +759,9 @@ export function DashboardView({
                     Mis Catálogos
                   </h1>
                   <p className="text-sm text-slate-600 mt-1">
-                    Crea múltiples tiendas con subdominio propio y administra sus inventarios desde
-                    un solo centro de control.
+                    Crea y administra tus tiendas con enlace directo en{' '}
+                    <span className="font-mono text-slate-800">catalogos.aurentime.shop</span> desde
+                    un solo lugar.
                   </p>
                 </div>
 
@@ -586,12 +789,12 @@ export function DashboardView({
                     >
                       <div>
                         <div className="flex items-start justify-between gap-3 mb-3">
-                          <div className="w-11 h-11 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden shrink-0">
+                          <div className="w-11 h-11 rounded-xl border border-slate-200 bg-white flex items-center justify-center overflow-hidden shrink-0 p-1">
                             {cat.config.logoUrl ? (
                               <img
                                 src={cat.config.logoUrl}
                                 alt={cat.config.nombre}
-                                className="w-full h-full object-cover"
+                                className="w-full h-full object-contain"
                               />
                             ) : (
                               <span className="font-display font-bold text-sm text-slate-800">
@@ -674,24 +877,27 @@ export function DashboardView({
                     Configuración de Tienda
                   </h1>
                   <p className="text-sm text-slate-600 mt-1">
-                    Personaliza tu identidad de marca, subdominio y tema visual de{' '}
+                    Personaliza la identidad de marca, el enlace público y el diseño de{' '}
                     <strong>{storeConfig.nombre}</strong>.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onResetDemo();
-                    triggerFeedback('Datos demo Auren Time restaurados');
-                  }}
-                  className="min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 flex items-center gap-1.5"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Restaurar demo Auren Time</span>
-                </button>
+                {isPlatformAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      lastBrandInputAtRef.current = 0;
+                      onResetDemo();
+                      triggerFeedback('Datos demo Auren Time restaurados');
+                    }}
+                    className="min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Restaurar demo Auren Time</span>
+                  </button>
+                )}
               </div>
 
-              {/* Dedicated Custom Domain Configuration Section */}
+              {/* Clean Store Public Link Section (Client Merchant View) */}
               <section
                 id="custom-domain-section"
                 aria-labelledby="custom-domain-heading"
@@ -707,12 +913,10 @@ export function DashboardView({
                         id="custom-domain-heading"
                         className="font-display text-lg font-bold text-slate-900"
                       >
-                        Enlace Público y Dominio Oficial
+                        Enlace Público de tu Tienda
                       </h2>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        Tu tienda opera bajo el dominio oficial{' '}
-                        <span className="font-mono">aurentime.shop</span>. El enlace corto directo{' '}
-                        <span className="font-mono">/{storeConfig.subdominio}</span> funciona de inmediato para compartir tu catálogo.
+                        Personaliza el identificador corto de tu catálogo y comparte este enlace directo con tus clientes.
                       </p>
                     </div>
                   </div>
@@ -742,71 +946,46 @@ export function DashboardView({
                 </div>
 
                 <form onSubmit={handleSaveCustomDomainSubmit} noValidate className="space-y-4">
-                  <div className="grid sm:grid-cols-12 gap-4 items-start">
-                    <div className="sm:col-span-5">
-                      <label
-                        htmlFor="custom-subdomain"
-                        className="block text-xs font-semibold text-slate-700 mb-1.5"
-                      >
-                        Identificador corto de la tienda (/...)
-                      </label>
-                      <input
-                        id="custom-subdomain"
-                        type="text"
-                        value={draftSubdomain}
-                        onChange={(e) => {
-                          setDraftSubdomain(e.target.value);
-                          if (domainFormError) setDomainFormError(null);
-                        }}
-                        placeholder="ej. relojes"
-                        aria-invalid={Boolean(domainFormError)}
-                        className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-slate-300 text-sm font-mono text-slate-900 focus:outline-none focus:border-cyan-600"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-7">
-                      <label
-                        htmlFor="custom-domain-base"
-                        className="block text-xs font-semibold text-slate-700 mb-1.5"
-                      >
-                        Dominio oficial de plataforma (sin https://)
-                      </label>
-                      <div className="flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
+                  <div>
+                    <label
+                      htmlFor="custom-subdomain"
+                      className="block text-xs font-semibold text-slate-700 mb-1.5"
+                    >
+                      Nombre corto de tu tienda en la URL
+                    </label>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                      <div className="flex-1 flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
                         <span className="px-3 py-2.5 bg-slate-100 border-r border-slate-200 text-xs font-mono text-slate-500 shrink-0">
-                          catalogos.
+                          catalogos.{DEFAULT_DOMAIN_BASE}/
                         </span>
                         <input
-                          id="custom-domain-base"
+                          id="custom-subdomain"
                           type="text"
-                          value={draftDomainBase}
+                          value={draftSubdomain}
                           onChange={(e) => {
-                            setDraftDomainBase(e.target.value);
+                            setDraftSubdomain(e.target.value);
                             if (domainFormError) setDomainFormError(null);
                           }}
-                          placeholder="aurentime.shop"
+                          placeholder="ej. relojes"
                           aria-invalid={Boolean(domainFormError)}
                           className="flex-1 min-w-0 min-h-[44px] px-3.5 py-2 text-sm font-mono text-slate-900 focus:outline-none"
                         />
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                        <span>Dominio oficial:</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDraftDomainBase(DEFAULT_DOMAIN_BASE);
-                            setDomainFormError(null);
-                          }}
-                          className={`font-mono px-2 py-0.5 rounded border transition-colors ${
-                            draftDomainBase.trim().toLowerCase() === DEFAULT_DOMAIN_BASE
-                              ? 'border-cyan-600 bg-cyan-50 text-cyan-800 font-semibold'
-                              : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                          }`}
-                        >
-                          .{DEFAULT_DOMAIN_BASE}
-                        </button>
-                        <span className="text-slate-400">· Base guardada: .{platformDomain}</span>
-                      </div>
+
+                      <button
+                        type="submit"
+                        className="min-h-[44px] px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0"
+                      >
+                        Guardar enlace
+                      </button>
                     </div>
+                    <p className="mt-1.5 text-[11px] text-slate-500">
+                      Vista previa:{' '}
+                      <strong className="font-mono text-slate-800">
+                        https://catalogos.{DEFAULT_DOMAIN_BASE}/
+                        {domainLiveCheck.subdominio || 'tu-tienda'}
+                      </strong>
+                    </p>
                   </div>
 
                   {domainFormError && (
@@ -818,90 +997,52 @@ export function DashboardView({
                       <span>{domainFormError}</span>
                     </div>
                   )}
-
-                  <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="text-xs text-slate-600 break-all">
-                      <span>Enlace público activo (listo para compartir): </span>
-                      <strong className="font-mono text-slate-900">
-                        https://catalogos.
-                        {domainLiveCheck.dominioBase || DEFAULT_DOMAIN_BASE}/
-                        {domainLiveCheck.subdominio || 'subdominio'}
-                      </strong>
-                    </div>
-                    {domainLiveCheck.valid &&
-                      domainLiveCheck.dominioBase !== DEFAULT_DOMAIN_BASE && (
-                        <span className="text-[11px] font-mono text-cyan-800 shrink-0">
-                          DNS sugerido: CNAME * → cname.aurentime.shop
-                        </span>
-                      )}
-                  </div>
-
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                    <label className="flex items-center gap-2.5 text-xs font-medium text-slate-700 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={applyDomainToAll}
-                        onChange={(e) => setApplyDomainToAll(e.target.checked)}
-                        className="w-4 h-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-600"
-                      />
-                      <span>
-                        Usar este dominio base en todos mis catálogos ({catalogs.length}) y en los
-                        nuevos
-                      </span>
-                    </label>
-
-                    <button
-                      type="submit"
-                      className="min-h-[42px] px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap"
-                    >
-                      Guardar enlace y dominio
-                    </button>
-                  </div>
                 </form>
 
-                {/* Active direct URL + optional dedicated subdomain warning */}
-                <div className="pt-4 border-t border-slate-100 grid lg:grid-cols-2 gap-4">
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 space-y-2">
-                    <p className="text-xs font-semibold text-emerald-900">
-                      Enlace público activo de tu tienda (listo para compartir)
-                    </p>
-                    <p className="text-[11px] text-emerald-800 leading-relaxed">
-                      Usa este enlace directo en tus redes sociales, biografía o WhatsApp para abrir{' '}
-                      <strong>{storeConfig.nombre}</strong> de inmediato:
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 min-w-0 truncate rounded-lg bg-white border border-emerald-200 px-2.5 py-1.5 text-[11px] font-mono text-slate-800">
+                {/* Ready-to-share store link card */}
+                <div className="pt-4 border-t border-slate-100">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-xs font-semibold text-emerald-900">
+                        Enlace público activo de {storeConfig.nombre}
+                      </p>
+                      <p className="text-[11px] text-emerald-800">
+                        Comparte este enlace en Instagram, TikTok o WhatsApp para recibir pedidos directos:
+                      </p>
+                      <code className="block truncate rounded-lg bg-white border border-emerald-200 px-3 py-2 text-xs font-mono text-slate-800">
                         {activeDirectLink}
                       </code>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={handleCopyDirectLink}
-                        className="min-h-[32px] px-2.5 py-1 rounded-lg border border-emerald-300 bg-white hover:bg-emerald-100 text-[11px] font-semibold text-emerald-900 shrink-0"
+                        className="min-h-[38px] px-3.5 py-1.5 rounded-lg border border-emerald-300 bg-white hover:bg-emerald-100 text-xs font-semibold text-emerald-900 inline-flex items-center gap-1.5"
                       >
-                        {directCopied ? 'Copiado' : 'Copiar'}
+                        {directCopied ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Copiado</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Copiar</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          flushValidBrandChanges();
+                          onOpenCatalog(activeCatalog.id);
+                        }}
+                        className="min-h-[38px] px-3.5 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                      >
+                        <span>Abrir tienda</span>
+                        <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
                     </div>
-                  </div>
-
-                  <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 space-y-1.5 text-[11px] text-slate-700">
-                    <p className="text-xs font-semibold text-amber-950">
-                      Subdominio directo (https://{activeFullUrl}) — Opcional, no activo automáticamente
-                    </p>
-                    <p>
-                      Este subdominio independiente <strong>NO funciona por defecto</strong> si no lo
-                      mapeas manualmente en Google Cloud y tu DNS:
-                    </p>
-                    <p>
-                      1. Agrega el subdominio en{' '}
-                      <strong>Cloud Run → Domain Mappings</strong> (o usa Cloudflare Proxy).
-                    </p>
-                    <p>
-                      2. Crea en tu DNS el registro{' '}
-                      <code className="font-mono text-slate-900">
-                        CNAME {storeConfig.subdominio} → ghs.googlehosted.com
-                      </code>
-                      .
-                    </p>
                   </div>
                 </div>
               </section>
@@ -918,10 +1059,13 @@ export function DashboardView({
                     <input
                       id="store-name"
                       type="text"
-                      value={storeConfig.nombre}
-                      onChange={(e) =>
-                        onUpdateConfig({ ...storeConfig, nombre: e.target.value })
-                      }
+                      value={draftStoreName}
+                      onChange={(e) => {
+                        lastBrandInputAtRef.current = Date.now();
+                        setDraftStoreName(e.target.value);
+                        if (brandFormError) setBrandFormError(null);
+                      }}
+                      onBlur={flushValidBrandChanges}
                       className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-cyan-600"
                     />
                   </div>
@@ -936,13 +1080,20 @@ export function DashboardView({
                     <input
                       id="store-whatsapp"
                       type="tel"
-                      value={storeConfig.whatsapp}
-                      onChange={(e) =>
-                        onUpdateConfig({ ...storeConfig, whatsapp: e.target.value })
-                      }
-                      placeholder="573001234567"
+                      inputMode="numeric"
+                      value={draftWhatsapp}
+                      onChange={(e) => {
+                        lastBrandInputAtRef.current = Date.now();
+                        setDraftWhatsapp(e.target.value);
+                        if (brandFormError) setBrandFormError(null);
+                      }}
+                      onBlur={flushValidBrandChanges}
+                      placeholder="Ej. 573001234567"
                       className="w-full min-h-[44px] px-3.5 py-2 rounded-lg border border-slate-300 text-sm font-mono text-slate-900 tabular-nums focus:outline-none focus:border-cyan-600"
                     />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Incluye código de país sin signos (ej. 573105551234).
+                    </p>
                   </div>
 
                   <div className="sm:col-span-2">
@@ -975,7 +1126,8 @@ export function DashboardView({
                       <button
                         type="button"
                         onClick={() => {
-                          onUpdateConfig({ ...storeConfig, descripcion: '' });
+                          lastBrandInputAtRef.current = Date.now();
+                          setDraftBio('');
                           document.getElementById('store-bio')?.focus();
                         }}
                         className="text-xs font-medium text-slate-500 hover:text-slate-800"
@@ -986,6 +1138,8 @@ export function DashboardView({
                         <button
                           type="button"
                           onClick={() => {
+                            lastBrandInputAtRef.current = Date.now();
+                            setDraftBio(RECOMMENDED_BIO_EXAMPLE);
                             onUpdateConfig({
                               ...storeConfig,
                               descripcion: RECOMMENDED_BIO_EXAMPLE,
@@ -1002,10 +1156,12 @@ export function DashboardView({
                   <textarea
                     id="store-bio"
                     rows={3}
-                    value={storeConfig.descripcion}
-                    onChange={(e) =>
-                      onUpdateConfig({ ...storeConfig, descripcion: e.target.value })
-                    }
+                    value={draftBio}
+                    onChange={(e) => {
+                      lastBrandInputAtRef.current = Date.now();
+                      setDraftBio(e.target.value);
+                    }}
+                    onBlur={flushValidBrandChanges}
                     placeholder="Escribe aquí la propuesta de valor de tu marca, garantía y condiciones de envío..."
                     className="w-full rounded-lg border border-slate-300 p-3.5 text-sm text-slate-900 focus:outline-none focus:border-cyan-600"
                   />
@@ -1035,12 +1191,12 @@ export function DashboardView({
                     Logotipo de tu marca propia
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
-                    <div className="w-14 h-14 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden shrink-0">
+                    <div className="w-16 h-16 rounded-xl border border-slate-200 bg-white flex items-center justify-center overflow-hidden shrink-0 p-1">
                       {storeConfig.logoUrl ? (
                         <img
                           src={storeConfig.logoUrl}
                           alt={`Logo de ${storeConfig.nombre}`}
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain"
                         />
                       ) : (
                         <span className="font-display font-bold text-lg text-slate-800">
@@ -1050,37 +1206,35 @@ export function DashboardView({
                     </div>
                     <label className="min-h-[40px] px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 cursor-pointer inline-flex items-center gap-2">
                       <ImagePlus className="w-4 h-4" aria-hidden="true" />
-                      <span>Subir logotipo propio</span>
+                      <span>
+                        {isUploadingLogo ? 'Procesando logotipo...' : 'Subir logotipo propio'}
+                      </span>
                       <input
                         type="file"
                         accept="image/*"
+                        disabled={isUploadingLogo}
                         onChange={handleLogoUpload}
                         className="sr-only"
                       />
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onUpdateConfig({
-                          ...storeConfig,
-                          logoUrl: '/assets/aistudio/Solo_logo_de_Leps_Digital_IA_2026_d4687b55.png',
-                        });
-                        triggerFeedback('Logo de Leps Digital aplicado');
-                      }}
-                      className="min-h-[40px] px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700"
-                    >
-                      Usar logo Leps Digital
-                    </button>
                     {storeConfig.logoUrl && (
                       <button
                         type="button"
-                        onClick={() => onUpdateConfig({ ...storeConfig, logoUrl: '' })}
-                        className="text-xs text-slate-500 hover:text-rose-600"
+                        onClick={() => {
+                          onUpdateConfig({ ...storeConfig, logoUrl: '' });
+                          triggerFeedback('Logotipo quitado');
+                        }}
+                        className="text-xs font-medium text-slate-500 hover:text-rose-600"
                       >
-                        Usar monograma
+                        Quitar logotipo
                       </button>
                     )}
                   </div>
+                  {logoError && (
+                    <p role="alert" className="mt-2 text-xs font-medium text-rose-600">
+                      {logoError}
+                    </p>
+                  )}
                 </div>
 
                 {/* Visual Template Selector */}
@@ -1119,13 +1273,23 @@ export function DashboardView({
                   </div>
                 </div>
 
+                {brandFormError && (
+                  <div
+                    role="alert"
+                    className="rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-800 flex items-start gap-2"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" aria-hidden="true" />
+                    <span>{brandFormError}</span>
+                  </div>
+                )}
+
                 <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
                   <p className="text-xs text-slate-500">
-                    Todos los cambios se guardan automáticamente en este navegador.
+                    Todos los cambios se guardan en tu cuenta.
                   </p>
                   <button
                     type="button"
-                    onClick={() => triggerFeedback('Identidad de marca guardada')}
+                    onClick={handleSaveBrandIdentity}
                     className="min-h-[42px] px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold transition-colors"
                   >
                     Guardar identidad de marca
@@ -1514,6 +1678,249 @@ export function DashboardView({
                   })}
                 </div>
               )}
+            </section>
+          )}
+
+          {activeTab === 'admin' && isPlatformAdmin && (
+            <section aria-labelledby="admin-panel-heading" className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h1
+                    id="admin-panel-heading"
+                    className="font-display text-2xl font-bold text-slate-900 tracking-tight"
+                  >
+                    Administración de Plataforma
+                  </h1>
+                  <p className="text-sm text-slate-600 mt-1">
+                    Control maestro desde <span className="font-mono text-slate-800">{currentUser.email}</span> para crear, supervisar y editar cualquier catálogo o tienda.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCreateModalOpen(true)}
+                  className="min-h-[44px] px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-semibold flex items-center justify-center gap-2 whitespace-nowrap shrink-0 transition-colors"
+                >
+                  <Plus className="w-4 h-4" aria-hidden="true" />
+                  <span>Nuevo Catálogo</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs text-slate-500">Total Catálogos</p>
+                  <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
+                    {allPlatformCatalogs.length}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs text-slate-500">Cuentas Registradas</p>
+                  <p className="font-display text-2xl font-bold text-cyan-700 tabular-nums mt-1">
+                    {adminUsers.length}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs text-slate-500">Productos en Plataforma</p>
+                  <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
+                    {totalPlatformProducts}
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative">
+                <Search
+                  className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={adminSearchQuery}
+                  onChange={(e) => setAdminSearchQuery(e.target.value)}
+                  aria-label="Buscar catálogos en toda la plataforma"
+                  placeholder="Buscar por nombre de tienda, enlace corto o correo de cuenta..."
+                  className="w-full min-h-[44px] pl-10 pr-4 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-cyan-600"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <h2 className="font-display text-base font-bold text-slate-900">
+                  Catálogos en la Plataforma ({filteredPlatformCatalogs.length})
+                </h2>
+
+                {filteredPlatformCatalogs.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center">
+                    <p className="text-sm font-medium text-slate-700">
+                      No hay catálogos que coincidan con tu búsqueda.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    {filteredPlatformCatalogs.map((cat) => {
+                      const ownerRecord = userByUid.get(cat.ownerUid);
+                      const ownerDisplay =
+                        (cat.ownerEmail && !cat.ownerEmail.startsWith('uid:')
+                          ? cat.ownerEmail
+                          : ownerRecord?.email) || cat.ownerUid;
+                      const isConfirmingDelete = confirmDeleteAdminId === cat.id;
+
+                      return (
+                        <article
+                          key={cat.id}
+                          className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col justify-between space-y-4"
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <h3 className="font-display text-base font-bold text-slate-900 truncate">
+                                  {cat.config.nombre}
+                                </h3>
+                                <p className="font-mono text-xs text-cyan-700 truncate">
+                                  {formatDirectStoreDisplay(cat.config)}
+                                </p>
+                              </div>
+                              <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md shrink-0 tabular-nums">
+                                {cat.products.length} prod.
+                              </span>
+                            </div>
+
+                            <div className="text-xs text-slate-600 space-y-0.5 pt-1">
+                              <p className="truncate">
+                                Cuenta:{' '}
+                                <span className="font-medium text-slate-800">
+                                  {ownerDisplay}
+                                </span>
+                              </p>
+                              <p>
+                                WhatsApp:{' '}
+                                <span className="font-mono text-slate-800">
+                                  {cat.config.whatsapp || 'Sin configurar'}
+                                </span>{' '}
+                                · Tema:{' '}
+                                {cat.config.tema === 'light'
+                                  ? 'Claro'
+                                  : cat.config.tema === 'dark'
+                                    ? 'Oscuro'
+                                    : 'Galaxia'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSelectCatalog(cat.id);
+                                setActiveTab('inventory');
+                              }}
+                              className="min-h-[36px] px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors"
+                            >
+                              Administrar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSelectCatalog(cat.id);
+                                setActiveTab('config');
+                              }}
+                              className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-semibold transition-colors"
+                            >
+                              Configurar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSelectCatalog(cat.id);
+                                onOpenCatalog(cat.id);
+                              }}
+                              className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-semibold inline-flex items-center gap-1 transition-colors"
+                            >
+                              <span>Ver tienda</span>
+                              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                            </button>
+
+                            {isConfirmingDelete ? (
+                              <div className="ml-auto flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onAdminDeleteCatalog?.(cat.id);
+                                    setConfirmDeleteAdminId(null);
+                                    triggerFeedback(`Catálogo "${cat.config.nombre}" eliminado`);
+                                  }}
+                                  className="min-h-[36px] px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold"
+                                >
+                                  Confirmar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteAdminId(null)}
+                                  className="min-h-[36px] px-2.5 py-1 rounded-lg border border-slate-300 text-slate-700 text-xs font-medium"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteAdminId(cat.id)}
+                                aria-label={`Eliminar catálogo ${cat.config.nombre}`}
+                                className="ml-auto min-h-[36px] min-w-[36px] rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center"
+                              >
+                                <Trash2 className="w-4 h-4" aria-hidden="true" />
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
+                <div className="flex items-center gap-2.5">
+                  <Users className="w-5 h-5 text-cyan-700" aria-hidden="true" />
+                  <h2 className="font-display text-base font-bold text-slate-900">
+                    Cuentas de Comercios Registradas ({adminUsers.length})
+                  </h2>
+                </div>
+                {adminUsers.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    Las cuentas registradas con Google aparecerán aquí automáticamente.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {adminUsers.map((usr) => {
+                      const ownedCount = allPlatformCatalogs.filter(
+                        (c) => c.ownerUid === usr.uid
+                      ).length;
+                      return (
+                        <div
+                          key={usr.uid}
+                          className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 truncate">
+                              {usr.name}
+                            </p>
+                            <p className="text-xs font-mono text-slate-600 truncate">
+                              {usr.email}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-slate-600 shrink-0">
+                            <span className="font-mono text-slate-500">
+                              {usr.platformDomain}
+                            </span>
+                            <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-800 font-semibold tabular-nums">
+                              {ownedCount} {ownedCount === 1 ? 'catálogo' : 'catálogos'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </section>
           )}
         </main>

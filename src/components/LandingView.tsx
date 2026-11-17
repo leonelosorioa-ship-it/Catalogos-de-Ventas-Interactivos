@@ -264,7 +264,7 @@ export function LandingView({
                 onClick={() => onNavigate('dashboard')}
                 className="mt-6 text-left text-xs font-semibold text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1.5 transition-colors"
               >
-                <span>Probar importador en el Admin</span>
+                <span>Probar importador en el Panel</span>
                 <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </article>
@@ -339,7 +339,7 @@ export function LandingView({
                   onClick={() => onNavigate('dashboard')}
                   className="min-h-[44px] px-5 py-2.5 rounded-xl border border-white/15 text-slate-200 font-medium text-sm hover:bg-white/5 transition-colors ease-snappy"
                 >
-                  Editar tienda en Admin
+                  Editar en mi Panel
                 </button>
               </div>
             </div>
@@ -381,14 +381,14 @@ export function LandingView({
                   <p className="font-semibold text-white">Solicitud registrada correctamente</p>
                   <p className="mt-1 text-emerald-200/90">
                     Un especialista de Leps Digital contactará a {leadName} al correo {leadEmail}.
-                    Mientras tanto, puedes probar el panel administrativo directamente.
+                    Mientras tanto, puedes probar tu panel de tienda directamente.
                   </p>
                   <button
                     type="button"
                     onClick={() => onNavigate('dashboard')}
                     className="mt-3 text-xs font-semibold text-cyan-400 hover:underline"
                   >
-                    Ir al Panel Administrativo →
+                    Ir al Panel de Tienda →
                   </button>
                 </div>
               </div>

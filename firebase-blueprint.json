@@ -122,8 +122,8 @@
         "logoUrl": {
           "type": "string",
           "minLength": 0,
-          "maxLength": 2048,
-          "description": "External or asset URL of the store logo."
+          "maxLength": 180000,
+          "description": "External, asset, or compressed data URL of the store logo."
         },
         "createdAt": {
           "type": "string",
@@ -212,8 +212,8 @@
         "imagen": {
           "type": "string",
           "minLength": 0,
-          "maxLength": 2048,
-          "description": "Product image URL or preset asset path."
+          "maxLength": 180000,
+          "description": "Product image URL, preset asset path, or compressed data URL."
         },
         "createdAt": {
           "type": "string",

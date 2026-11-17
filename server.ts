@@ -5,13 +5,32 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
-import { getOrCreateUser, updateUserPlatformDomain } from './src/db/users.ts';
 import {
+  getAllUsersForAdmin,
+  getOrCreateUser,
+  updateUserPlatformDomain,
+} from './src/db/users.ts';
+import {
+  adminDeleteCatalogById,
+  adminUpsertCatalog,
+  getAllCatalogsForAdmin,
   getPublicCatalogBySlug,
   getUserCatalogs,
   replaceUserCatalogs,
 } from './src/db/catalogs.ts';
-import type { CatalogWorkspace } from './src/utils/catalogLogic.ts';
+import {
+  PLATFORM_ADMIN_EMAIL,
+  type CatalogWorkspace,
+} from './src/utils/catalogLogic.ts';
+
+function isVerifiedGoogleAdminToken(user?: AuthRequest['user']): boolean {
+  if (!user) return false;
+  return (
+    user.email_verified === true &&
+    typeof user.email === 'string' &&
+    user.email.trim().toLowerCase() === PLATFORM_ADMIN_EMAIL
+  );
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -112,6 +131,7 @@ async function startServer() {
           email: dbUser.email,
           name: dbUser.name,
           platformDomain: dbUser.platformDomain,
+          isAdmin: isVerifiedGoogleAdminToken(req.user),
         },
         catalogs: userCatalogs,
       });
@@ -158,6 +178,108 @@ async function startServer() {
     } catch (error) {
       console.error('Failed to save authenticated catalogs:', error);
       res.status(500).json({ error: 'No se pudieron guardar tus cambios.' });
+    }
+  });
+
+  app.get('/api/admin/overview', requireAuth, async (req: AuthRequest, res) => {
+    if (!isVerifiedGoogleAdminToken(req.user)) {
+      res.status(403).json({
+        error: 'Acceso restringido: requiere cuenta administrativa verificada con Google.',
+      });
+      return;
+    }
+    try {
+      const [allUsers, allCatalogs] = await Promise.all([
+        getAllUsersForAdmin(),
+        getAllCatalogsForAdmin(),
+      ]);
+      res.json({
+        users: allUsers,
+        catalogs: allCatalogs,
+      });
+    } catch (error) {
+      console.error('Failed to load admin overview:', error);
+      res.status(500).json({ error: 'No se pudo cargar el panel administrativo.' });
+    }
+  });
+
+  app.post('/api/admin/catalogs', requireAuth, async (req: AuthRequest, res) => {
+    if (!isVerifiedGoogleAdminToken(req.user)) {
+      res.status(403).json({ error: 'Acceso restringido al administrador.' });
+      return;
+    }
+    try {
+      const uid = req.user?.uid;
+      const email = req.user?.email || PLATFORM_ADMIN_EMAIL;
+      if (!uid) {
+        res.status(401).json({ error: 'Sesión inválida.' });
+        return;
+      }
+      const { catalog } = req.body as { catalog?: CatalogWorkspace };
+      if (!catalog || !catalog.config) {
+        res.status(400).json({ error: 'Datos de catálogo inválidos.' });
+        return;
+      }
+
+      const dbAdmin = await getOrCreateUser(uid, email, req.user?.name);
+      const saved = await adminUpsertCatalog(dbAdmin.id, catalog);
+      const slug = normalizeSlug(saved.config.subdominio || '');
+      if (slug) {
+        publicCatalogRegistry.set(slug, saved as unknown as StoredCatalogPayload);
+        persistCatalogRegistry();
+      }
+      res.json({ catalog: saved });
+    } catch (error) {
+      console.error('Failed to create catalog as admin:', error);
+      res.status(500).json({ error: 'No se pudo crear el catálogo desde Admin.' });
+    }
+  });
+
+  app.put('/api/admin/catalogs/:catalogId', requireAuth, async (req: AuthRequest, res) => {
+    if (!isVerifiedGoogleAdminToken(req.user)) {
+      res.status(403).json({ error: 'Acceso restringido al administrador.' });
+      return;
+    }
+    try {
+      const uid = req.user?.uid;
+      const email = req.user?.email || PLATFORM_ADMIN_EMAIL;
+      if (!uid) {
+        res.status(401).json({ error: 'Sesión inválida.' });
+        return;
+      }
+      const { catalog } = req.body as { catalog?: CatalogWorkspace };
+      if (!catalog || !catalog.config) {
+        res.status(400).json({ error: 'Datos de catálogo inválidos.' });
+        return;
+      }
+      const dbAdmin = await getOrCreateUser(uid, email, req.user?.name);
+      const saved = await adminUpsertCatalog(dbAdmin.id, {
+        ...catalog,
+        id: req.params.catalogId || catalog.id,
+      });
+      const slug = normalizeSlug(saved.config.subdominio || '');
+      if (slug) {
+        publicCatalogRegistry.set(slug, saved as unknown as StoredCatalogPayload);
+        persistCatalogRegistry();
+      }
+      res.json({ catalog: saved });
+    } catch (error) {
+      console.error('Failed to update catalog as admin:', error);
+      res.status(500).json({ error: 'No se pudo actualizar el catálogo desde Admin.' });
+    }
+  });
+
+  app.delete('/api/admin/catalogs/:catalogId', requireAuth, async (req: AuthRequest, res) => {
+    if (!isVerifiedGoogleAdminToken(req.user)) {
+      res.status(403).json({ error: 'Acceso restringido al administrador.' });
+      return;
+    }
+    try {
+      const deleted = await adminDeleteCatalogById(req.params.catalogId);
+      res.json({ deleted });
+    } catch (error) {
+      console.error('Failed to delete catalog as admin:', error);
+      res.status(500).json({ error: 'No se pudo eliminar el catálogo.' });
     }
   });
 
