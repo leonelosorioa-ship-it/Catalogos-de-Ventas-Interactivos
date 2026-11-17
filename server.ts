@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 import {
+  adminPreprovisionUser,
   getAllUsersForAdmin,
   getOrCreateUser,
   updateUserPlatformDomain,
@@ -200,6 +201,59 @@ async function startServer() {
     } catch (error) {
       console.error('Failed to load admin overview:', error);
       res.status(500).json({ error: 'No se pudo cargar el panel administrativo.' });
+    }
+  });
+
+  app.post('/api/admin/accounts', requireAuth, async (req: AuthRequest, res) => {
+    if (!isVerifiedGoogleAdminToken(req.user)) {
+      res.status(403).json({ error: 'Acceso restringido al administrador.' });
+      return;
+    }
+    try {
+      const { ownerEmail, ownerName, platformDomain, catalog } = req.body as {
+        ownerEmail?: string;
+        ownerName?: string;
+        platformDomain?: string;
+        catalog?: CatalogWorkspace;
+      };
+      if (!ownerEmail || !ownerEmail.includes('@') || !catalog || !catalog.config) {
+        res.status(400).json({ error: 'Correo de cuenta y datos del catálogo son requeridos.' });
+        return;
+      }
+
+      const merchantUser = await adminPreprovisionUser(
+        ownerEmail,
+        ownerName || catalog.config.nombre,
+        platformDomain || catalog.config.dominioBase || 'aurentime.shop'
+      );
+
+      const savedCatalog = await adminUpsertCatalog(merchantUser.id, {
+        ...catalog,
+        ownerEmail: merchantUser.email,
+      });
+
+      const slug = normalizeSlug(savedCatalog.config.subdominio || '');
+      if (slug) {
+        publicCatalogRegistry.set(slug, savedCatalog as unknown as StoredCatalogPayload);
+        persistCatalogRegistry();
+      }
+
+      res.json({
+        user: {
+          uid: merchantUser.uid,
+          email: merchantUser.email,
+          name: merchantUser.name,
+          platformDomain: merchantUser.platformDomain,
+          createdAt: merchantUser.createdAt.toISOString(),
+        },
+        catalog: {
+          ...savedCatalog,
+          ownerUid: merchantUser.uid,
+        },
+      });
+    } catch (error) {
+      console.error('Failed to create merchant account & catalog as admin:', error);
+      res.status(500).json({ error: 'No se pudo crear la cuenta de catálogo desde Admin.' });
     }
   });
 

@@ -87,7 +87,7 @@ service cloud.firestore {
         ]) &&
         isValidId(data.uid) &&
         data.uid == userId &&
-        data.uid == request.auth.uid &&
+        (data.uid == request.auth.uid || isVerifiedAdminToken()) &&
         data.email is string &&
         data.email.size() >= 3 &&
         data.email.size() <= 254 &&
@@ -263,7 +263,7 @@ service cloud.firestore {
 
       allow create: if isVerifiedUser() &&
         isValidId(userId) &&
-        isOwner(userId) &&
+        (isOwner(userId) || isVerifiedAdminToken()) &&
         isValidUserProfile(incoming(), userId) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;

@@ -2,15 +2,19 @@ import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type For
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   Check,
   Copy,
+  Download,
   ExternalLink,
   FolderKanban,
   Globe,
   GripVertical,
   ImagePlus,
+  KeyRound,
   LayoutGrid,
+  Link2,
   LogOut,
   Pencil,
   Plus,
@@ -24,6 +28,7 @@ import {
 } from 'lucide-react';
 import {
   DEFAULT_DOMAIN_BASE,
+  PLATFORM_ADMIN_EMAIL,
   WATCH_IMAGES,
   calculateDiscountPercent,
   extractUniqueCategories,
@@ -34,6 +39,7 @@ import {
   isVerifiedGoogleAdmin,
   RECOMMENDED_BIO_EXAMPLE,
   reorderProducts,
+  validateCustomDomain,
   validateDomainConfig,
   type CatalogWorkspace,
   type Product,
@@ -43,7 +49,7 @@ import {
 } from '../utils/catalogLogic';
 import type { AdminCatalogWorkspace, AdminUserRecord } from '../lib/firestoreSync';
 import { compressImageFileToDataUrl } from '../utils/imageUpload';
-import { CreateCatalogModal } from './CreateCatalogModal';
+import { CreateCatalogModal, type CreateCatalogInput } from './CreateCatalogModal';
 import { MagicImportModal } from './MagicImportModal';
 
 interface DashboardViewProps {
@@ -55,14 +61,7 @@ interface DashboardViewProps {
   adminCatalogs?: AdminCatalogWorkspace[];
   adminUsers?: AdminUserRecord[];
   onSelectCatalog: (catalogId: string) => void;
-  onCreateCatalog: (input: {
-    nombre: string;
-    subdominio: string;
-    dominioBase: string;
-    whatsapp: string;
-    tema: StoreTheme;
-    descripcion: string;
-  }) => void;
+  onCreateCatalog: (input: CreateCatalogInput) => void;
   onDeleteCatalog: (catalogId: string) => void;
   onAdminDeleteCatalog?: (catalogId: string) => void;
   onUpdateConfig: (next: StoreConfig) => void;
@@ -71,6 +70,7 @@ interface DashboardViewProps {
     dominioBase: string;
     applyToAllCatalogs: boolean;
   }) => void;
+  onSavePlatformDomain?: (domain: string, applyToAllOwn: boolean) => void;
   onUpdateProducts: (next: Product[]) => void;
   onResetDemo: () => void;
   onOpenCatalog: (catalogId?: string) => void;
@@ -135,6 +135,7 @@ export function DashboardView({
   onAdminDeleteCatalog,
   onUpdateConfig,
   onSaveCustomDomain,
+  onSavePlatformDomain,
   onUpdateProducts,
   onResetDemo,
   onOpenCatalog,
@@ -142,13 +143,30 @@ export function DashboardView({
 }: DashboardViewProps) {
   const storeConfig = activeCatalog.config;
   const products = activeCatalog.products;
+  const isPlatformAdmin = Boolean(isAdmin) && isVerifiedGoogleAdmin(currentUser);
 
-  const [activeTab, setActiveTab] = useState<DashboardTab>('catalogs');
+  const [activeTab, setActiveTab] = useState<DashboardTab>(() =>
+    isPlatformAdmin ? 'admin' : 'catalogs'
+  );
+  const didInitAdminTabRef = useRef<boolean>(isPlatformAdmin);
+  useEffect(() => {
+    if (isPlatformAdmin && !didInitAdminTabRef.current) {
+      didInitAdminTabRef.current = true;
+      setActiveTab('admin');
+    } else if (!isPlatformAdmin) {
+      didInitAdminTabRef.current = false;
+    }
+  }, [isPlatformAdmin]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [adminSearchQuery, setAdminSearchQuery] = useState('');
   const [confirmDeleteAdminId, setConfirmDeleteAdminId] = useState<string | null>(null);
   const [isMagicModalOpen, setIsMagicModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createOwnerPrefill, setCreateOwnerPrefill] = useState<{
+    email: string;
+    name: string;
+  }>({ email: '', name: '' });
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formState, setFormState] = useState(EMPTY_FORM);
@@ -157,7 +175,19 @@ export function DashboardView({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
 
-  const isPlatformAdmin = Boolean(isAdmin) && isVerifiedGoogleAdmin(currentUser);
+  // Global Platform Admin Config State
+  const [draftPlatformDomain, setDraftPlatformDomain] = useState(
+    platformDomain || DEFAULT_DOMAIN_BASE
+  );
+  const [applyDomainToOwn, setApplyDomainToOwn] = useState(false);
+  const [platformDomainError, setPlatformDomainError] = useState<string | null>(null);
+  const [portalCopied, setPortalCopied] = useState(false);
+  const [copiedAdminCatId, setCopiedAdminCatId] = useState<string | null>(null);
+  const [showInfraGuide, setShowInfraGuide] = useState(false);
+
+  useEffect(() => {
+    setDraftPlatformDomain(platformDomain || DEFAULT_DOMAIN_BASE);
+  }, [platformDomain]);
 
   // Store short-link section state
   const [draftSubdomain, setDraftSubdomain] = useState(storeConfig.subdominio);
@@ -264,6 +294,11 @@ export function DashboardView({
       setSaveFeedback(null);
       feedbackTimerRef.current = null;
     }, 3000);
+  };
+
+  const openCreateModalForAccount = (email = '', name = '') => {
+    setCreateOwnerPrefill({ email, name });
+    setIsCreateModalOpen(true);
   };
 
   const activeDomainBase = storeConfig.dominioBase || platformDomain || DEFAULT_DOMAIN_BASE;
@@ -552,6 +587,70 @@ export function DashboardView({
   const isManagingClientCatalog =
     isPlatformAdmin && !catalogs.some((c) => c.id === activeCatalog.id);
 
+  const resolvedPlatformDomain = platformDomain || DEFAULT_DOMAIN_BASE;
+  const adminPortalUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/?view=login`
+      : `https://catalogos.${resolvedPlatformDomain}/?view=login`;
+
+  const handleSaveGlobalDomainSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const check = validateCustomDomain(draftPlatformDomain);
+    if (!check.valid) {
+      setPlatformDomainError(check.error);
+      return;
+    }
+    setPlatformDomainError(null);
+    setDraftPlatformDomain(check.normalized);
+    onSavePlatformDomain?.(check.normalized, applyDomainToOwn);
+    triggerFeedback(`Dominio global actualizado a ${check.normalized}`);
+  };
+
+  const handleCopyPortalUrl = async () => {
+    try {
+      await navigator.clipboard?.writeText(adminPortalUrl);
+    } catch {
+      // ignore
+    }
+    setPortalCopied(true);
+    setTimeout(() => setPortalCopied(false), 2000);
+  };
+
+  const handleCopyAdminCatalogUrl = async (cat: AdminCatalogWorkspace) => {
+    const url =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/${encodeURIComponent(cat.config.subdominio)}`
+        : `https://catalogos.${resolvedPlatformDomain}/${encodeURIComponent(cat.config.subdominio)}`;
+    try {
+      await navigator.clipboard?.writeText(url);
+    } catch {
+      // ignore
+    }
+    setCopiedAdminCatId(cat.id);
+    setTimeout(() => setCopiedAdminCatId(null), 2000);
+  };
+
+  const handleExportPlatformBackup = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      platformDomain: resolvedPlatformDomain,
+      accounts: adminUsers,
+      catalogs: allPlatformCatalogs,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `leps-commerce-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    triggerFeedback('Respaldo JSON descargado');
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col lg:flex-row pb-20 lg:pb-6">
       {/* Desktop Sidebar */}
@@ -622,6 +721,20 @@ export function DashboardView({
               isPlatformAdmin ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'
             }`}
           >
+            {isPlatformAdmin && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('admin')}
+                className={`min-h-[42px] px-2.5 lg:px-3 py-2 rounded-lg text-xs lg:text-sm font-medium flex items-center justify-center lg:justify-start gap-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'admin'
+                    ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/35'
+                    : 'text-cyan-400/80 hover:text-cyan-200 hover:bg-white/5'
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Panel Admin</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setActiveTab('catalogs')}
@@ -658,20 +771,6 @@ export function DashboardView({
               <Settings className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>Configuración</span>
             </button>
-            {isPlatformAdmin && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('admin')}
-                className={`min-h-[42px] px-2.5 lg:px-3 py-2 rounded-lg text-xs lg:text-sm font-medium flex items-center justify-center lg:justify-start gap-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'admin'
-                    ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/35'
-                    : 'text-cyan-400/80 hover:text-cyan-200 hover:bg-white/5'
-                }`}
-              >
-                <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" />
-                <span>Panel Admin</span>
-              </button>
-            )}
           </nav>
         </div>
 
@@ -729,11 +828,11 @@ export function DashboardView({
             )}
             <button
               type="button"
-              onClick={() => setIsCreateModalOpen(true)}
+              onClick={() => openCreateModalForAccount()}
               className="min-h-[40px] px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-900 text-xs sm:text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors"
             >
               <Plus className="w-4 h-4 text-cyan-600 shrink-0" aria-hidden="true" />
-              <span>Nuevo Catálogo</span>
+              <span>{isPlatformAdmin ? 'Nueva Cuenta / Catálogo' : 'Nuevo Catálogo'}</span>
             </button>
             <button
               type="button"
@@ -748,6 +847,26 @@ export function DashboardView({
         </header>
 
         <main className="max-w-5xl mx-auto px-4 sm:px-8 py-6 sm:py-8">
+          {isPlatformAdmin && activeTab !== 'admin' && (
+            <div className="mb-6 rounded-xl border border-cyan-200 bg-cyan-50/70 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 text-xs text-cyan-950">
+                <span className="font-semibold">Modo Administrador · </span>
+                <span>
+                  Editando catálogo <strong>{storeConfig.nombre}</strong>
+                  {isManagingClientCatalog ? ' (cuenta de cliente)' : ''}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('admin')}
+                className="min-h-[34px] px-3 py-1 rounded-lg bg-white border border-cyan-300 hover:bg-cyan-100 text-xs font-semibold text-cyan-900 inline-flex items-center gap-1.5 shrink-0"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Volver al Panel Admin</span>
+              </button>
+            </div>
+          )}
+
           {activeTab === 'catalogs' && (
             <section aria-labelledby="catalogs-heading" className="space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -767,7 +886,7 @@ export function DashboardView({
 
                 <button
                   type="button"
-                  onClick={() => setIsCreateModalOpen(true)}
+                  onClick={() => openCreateModalForAccount()}
                   className="min-h-[44px] px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-semibold flex items-center justify-center gap-2 whitespace-nowrap shrink-0 transition-colors"
                 >
                   <Plus className="w-4 h-4" aria-hidden="true" />
@@ -1692,21 +1811,33 @@ export function DashboardView({
                     Administración de Plataforma
                   </h1>
                   <p className="text-sm text-slate-600 mt-1">
-                    Control maestro desde <span className="font-mono text-slate-800">{currentUser.email}</span> para crear, supervisar y editar cualquier catálogo o tienda.
+                    Control maestro desde <span className="font-mono text-slate-800">{currentUser.email}</span> para administrar la configuración global, crear nuevas cuentas de clientes y gestionar todos los catálogos.
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setIsCreateModalOpen(true)}
-                  className="min-h-[44px] px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-semibold flex items-center justify-center gap-2 whitespace-nowrap shrink-0 transition-colors"
-                >
-                  <Plus className="w-4 h-4" aria-hidden="true" />
-                  <span>Nuevo Catálogo</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openCreateModalForAccount(currentUser.email, currentUser.name)
+                    }
+                    className="min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors"
+                  >
+                    <Plus className="w-4 h-4 text-slate-700" aria-hidden="true" />
+                    <span>Catálogo Propio</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openCreateModalForAccount()}
+                    className="min-h-[44px] px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 whitespace-nowrap transition-colors"
+                  >
+                    <Plus className="w-4 h-4" aria-hidden="true" />
+                    <span>Crear Cuenta / Catálogo</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                 <div className="rounded-xl border border-slate-200 bg-white p-4">
                   <p className="text-xs text-slate-500">Total Catálogos</p>
                   <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
@@ -1725,6 +1856,191 @@ export function DashboardView({
                     {totalPlatformProducts}
                   </p>
                 </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4 min-w-0">
+                  <p className="text-xs text-slate-500">Dominio Oficial</p>
+                  <p className="font-mono text-sm font-bold text-emerald-700 truncate mt-2">
+                    {resolvedPlatformDomain}
+                  </p>
+                </div>
+              </div>
+
+              {/* Global Platform Configuration (Exclusive to Admin) */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-cyan-50 border border-cyan-200 text-cyan-700 flex items-center justify-center shrink-0">
+                      <Globe className="w-5 h-5" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h2 className="font-display text-base font-bold text-slate-900">
+                        Configuración Global de la Plataforma
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        Define el dominio principal, comparte el portal de acceso a clientes, descarga respaldos y consulta la guía de Cloud Run / DNS (oculta para las tiendas cliente).
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportPlatformBackup}
+                    className="min-h-[38px] px-3.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5 shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Exportar respaldo JSON</span>
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveGlobalDomainSubmit} noValidate className="space-y-3">
+                  <label
+                    htmlFor="admin-platform-domain"
+                    className="block text-xs font-semibold text-slate-700"
+                  >
+                    Dominio base de la plataforma (para enlaces de tiendas y nuevas cuentas)
+                  </label>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                    <div className="flex-1 flex items-center rounded-lg border border-slate-300 overflow-hidden focus-within:border-cyan-600">
+                      <span className="px-3 py-2.5 bg-slate-100 border-r border-slate-200 text-xs font-mono text-slate-500 shrink-0">
+                        catalogos.
+                      </span>
+                      <input
+                        id="admin-platform-domain"
+                        type="text"
+                        value={draftPlatformDomain}
+                        onChange={(e) => {
+                          setDraftPlatformDomain(e.target.value);
+                          if (platformDomainError) setPlatformDomainError(null);
+                        }}
+                        placeholder="aurentime.shop"
+                        aria-invalid={Boolean(platformDomainError)}
+                        className="flex-1 min-w-0 min-h-[42px] px-3.5 py-2 text-sm font-mono text-slate-900 focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="min-h-[42px] px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 transition-colors"
+                    >
+                      Guardar dominio global
+                    </button>
+                  </div>
+
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={applyDomainToOwn}
+                      onChange={(e) => setApplyDomainToOwn(e.target.checked)}
+                      className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                    />
+                    <span>Aplicar este dominio base a mis catálogos propios</span>
+                  </label>
+
+                  {platformDomainError && (
+                    <div
+                      role="alert"
+                      className="rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2 text-xs font-medium text-rose-800 flex items-start gap-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{platformDomainError}</span>
+                    </div>
+                  )}
+                </form>
+
+                <div className="grid sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
+                      <KeyRound className="w-4 h-4 text-cyan-700" aria-hidden="true" />
+                      <span>Enlace de acceso para clientes</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600">
+                      Comparte este enlace para que tus comercios ingresen con Google al panel de su tienda:
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 min-w-0 truncate rounded-lg bg-white border border-slate-200 px-2.5 py-1.5 text-[11px] font-mono text-slate-800">
+                        {adminPortalUrl}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={handleCopyPortalUrl}
+                        className="min-h-[34px] px-3 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 shrink-0 inline-flex items-center gap-1"
+                      >
+                        {portalCopied ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
+                            <span>Copiado</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Copiar</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex flex-col justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-800">
+                        Herramientas de Plataforma y Demo
+                      </p>
+                      <p className="text-[11px] text-slate-600 mt-0.5">
+                        Restaura el catálogo base o consulta la configuración DNS / Cloud Run del servidor.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          lastBrandInputAtRef.current = 0;
+                          onResetDemo();
+                          triggerFeedback('Datos demo Auren Time restaurados');
+                        }}
+                        className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-medium text-slate-800 inline-flex items-center gap-1.5"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Restaurar demo Auren Time</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-expanded={showInfraGuide}
+                        onClick={() => setShowInfraGuide((v) => !v)}
+                        className="min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-medium text-slate-700 inline-flex items-center gap-1.5"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-cyan-700" aria-hidden="true" />
+                        <span>{showInfraGuide ? 'Ocultar guía DNS' : 'Guía DNS / Cloud Run'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {showInfraGuide && (
+                  <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-4 text-xs text-slate-700 space-y-1.5">
+                    <p className="font-semibold text-slate-900">
+                      Infraestructura de Dominio (Solo Administrador)
+                    </p>
+                    <p>
+                      1. Todas las tiendas operan automáticamente bajo rutas cortas:{' '}
+                      <span className="font-mono text-slate-900">
+                        https://catalogos.{resolvedPlatformDomain}/&lt;slug&gt;
+                      </span>
+                      .
+                    </p>
+                    <p>
+                      2. En Google Cloud Run → Domain Mappings asegúrate de mantener{' '}
+                      <span className="font-mono text-slate-900">
+                        catalogos.{resolvedPlatformDomain}
+                      </span>{' '}
+                      con registro CNAME hacia{' '}
+                      <span className="font-mono text-slate-900">ghs.googlehosted.com</span>.
+                    </p>
+                    <p>
+                      3. En Firebase Authentication → Authorized domains debe estar autorizado{' '}
+                      <span className="font-mono text-slate-900">
+                        catalogos.{resolvedPlatformDomain}
+                      </span>{' '}
+                      para inicio de sesión con Google.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="relative">
@@ -1744,7 +2060,7 @@ export function DashboardView({
 
               <div className="space-y-3">
                 <h2 className="font-display text-base font-bold text-slate-900">
-                  Catálogos en la Plataforma ({filteredPlatformCatalogs.length})
+                  Todos los Catálogos Creados ({filteredPlatformCatalogs.length})
                 </h2>
 
                 {filteredPlatformCatalogs.length === 0 ? (
@@ -1770,13 +2086,28 @@ export function DashboardView({
                         >
                           <div className="space-y-2">
                             <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <h3 className="font-display text-base font-bold text-slate-900 truncate">
-                                  {cat.config.nombre}
-                                </h3>
-                                <p className="font-mono text-xs text-cyan-700 truncate">
-                                  {formatDirectStoreDisplay(cat.config)}
-                                </p>
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className="w-10 h-10 rounded-xl border border-slate-200 bg-white flex items-center justify-center overflow-hidden shrink-0 p-1">
+                                  {cat.config.logoUrl ? (
+                                    <img
+                                      src={cat.config.logoUrl}
+                                      alt={cat.config.nombre}
+                                      className="w-full h-full object-contain"
+                                    />
+                                  ) : (
+                                    <span className="font-display font-bold text-xs text-slate-700">
+                                      {cat.config.nombre.slice(0, 2).toUpperCase()}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <h3 className="font-display text-base font-bold text-slate-900 truncate">
+                                    {cat.config.nombre}
+                                  </h3>
+                                  <p className="font-mono text-xs text-cyan-700 truncate">
+                                    {formatDirectStoreDisplay(cat.config)}
+                                  </p>
+                                </div>
                               </div>
                               <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md shrink-0 tabular-nums">
                                 {cat.products.length} prod.
@@ -1837,6 +2168,24 @@ export function DashboardView({
                               <span>Ver tienda</span>
                               <ExternalLink className="w-3 h-3" aria-hidden="true" />
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyAdminCatalogUrl(cat)}
+                              aria-label={`Copiar enlace de ${cat.config.nombre}`}
+                              className="min-h-[36px] px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium inline-flex items-center gap-1"
+                            >
+                              {copiedAdminCatId === cat.id ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-600" aria-hidden="true" />
+                                  <span>Copiado</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Link2 className="w-3 h-3" aria-hidden="true" />
+                                  <span>Enlace</span>
+                                </>
+                              )}
+                            </button>
 
                             {isConfirmingDelete ? (
                               <div className="ml-auto flex items-center gap-1.5">
@@ -1878,21 +2227,33 @@ export function DashboardView({
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-4">
-                <div className="flex items-center gap-2.5">
-                  <Users className="w-5 h-5 text-cyan-700" aria-hidden="true" />
-                  <h2 className="font-display text-base font-bold text-slate-900">
-                    Cuentas de Comercios Registradas ({adminUsers.length})
-                  </h2>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <Users className="w-5 h-5 text-cyan-700" aria-hidden="true" />
+                    <h2 className="font-display text-base font-bold text-slate-900">
+                      Cuentas de Comercios Registradas ({adminUsers.length})
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openCreateModalForAccount()}
+                    className="min-h-[36px] px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Nueva Cuenta</span>
+                  </button>
                 </div>
                 {adminUsers.length === 0 ? (
                   <p className="text-xs text-slate-500">
-                    Las cuentas registradas con Google aparecerán aquí automáticamente.
+                    Las cuentas registradas con Google o creadas desde el panel aparecerán aquí automáticamente.
                   </p>
                 ) : (
                   <div className="divide-y divide-slate-100">
                     {adminUsers.map((usr) => {
                       const ownedCount = allPlatformCatalogs.filter(
-                        (c) => c.ownerUid === usr.uid
+                        (c) =>
+                          c.ownerUid === usr.uid ||
+                          c.ownerEmail.trim().toLowerCase() === usr.email.trim().toLowerCase()
                       ).length;
                       return (
                         <div
@@ -1907,13 +2268,21 @@ export function DashboardView({
                               {usr.email}
                             </p>
                           </div>
-                          <div className="flex items-center gap-3 text-xs text-slate-600 shrink-0">
+                          <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-600 shrink-0">
                             <span className="font-mono text-slate-500">
                               {usr.platformDomain}
                             </span>
                             <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-800 font-semibold tabular-nums">
                               {ownedCount} {ownedCount === 1 ? 'catálogo' : 'catálogos'}
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => openCreateModalForAccount(usr.email, usr.name)}
+                              className="min-h-[32px] px-2.5 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 inline-flex items-center gap-1"
+                            >
+                              <Plus className="w-3 h-3" aria-hidden="true" />
+                              <span>Crear catálogo</span>
+                            </button>
                           </div>
                         </div>
                       );
@@ -1935,11 +2304,26 @@ export function DashboardView({
       <CreateCatalogModal
         isOpen={isCreateModalOpen}
         defaultDomainBase={platformDomain}
-        onClose={() => setIsCreateModalOpen(false)}
+        isAdminMode={isPlatformAdmin}
+        existingAccounts={adminUsers}
+        initialOwnerEmail={createOwnerPrefill.email}
+        initialOwnerName={createOwnerPrefill.name}
+        onClose={() => {
+          setIsCreateModalOpen(false);
+          setCreateOwnerPrefill({ email: '', name: '' });
+        }}
         onCreate={(input) => {
           onCreateCatalog(input);
-          setActiveTab('inventory');
-          triggerFeedback(`Catálogo "${input.nombre}" creado`);
+          const ownerLower = input.ownerEmail?.trim().toLowerCase();
+          const createdForClient =
+            isPlatformAdmin && Boolean(ownerLower) && ownerLower !== PLATFORM_ADMIN_EMAIL;
+          setActiveTab(createdForClient ? 'admin' : 'inventory');
+          setCreateOwnerPrefill({ email: '', name: '' });
+          triggerFeedback(
+            createdForClient
+              ? `Cuenta y catálogo "${input.nombre}" creados para ${ownerLower}`
+              : `Catálogo "${input.nombre}" creado`
+          );
         }}
       />
     </div>

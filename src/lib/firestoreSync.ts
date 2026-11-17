@@ -115,13 +115,16 @@ export async function updatePlatformDomainInFirestore(
 
 async function fetchProductsForCatalog(
   catalogId: string,
-  ownerUid?: string
+  ownerUid?: string,
+  asAdmin = false
 ): Promise<Product[]> {
   const path = `catalogs/${catalogId}/products`;
   const colRef = collection(db, 'catalogs', catalogId, 'products');
-  const q = ownerUid
-    ? query(colRef, where('ownerUid', '==', ownerUid))
-    : query(colRef, where('isPublic', '==', true));
+  const q = asAdmin
+    ? colRef
+    : ownerUid
+      ? query(colRef, where('ownerUid', '==', ownerUid))
+      : query(colRef, where('isPublic', '==', true));
 
   try {
     const snap = await getDocs(q);
@@ -590,7 +593,7 @@ export function subscribeAllCatalogsAdminInFirestore(
           snapshot.docs.map(async (catDoc) => {
             const data = catDoc.data();
             const ownerUid = String(data.ownerUid || fbUser.uid);
-            const products = await fetchProductsForCatalog(catDoc.id, ownerUid);
+            const products = await fetchProductsForCatalog(catDoc.id, undefined, true);
             const base = migrateCatalogWorkspace({
               id: catDoc.id,
               ownerEmail: ownerUid === fbUser.uid ? fbUser.email || PLATFORM_ADMIN_EMAIL : `uid:${ownerUid}`,
@@ -622,6 +625,43 @@ export function subscribeAllCatalogsAdminInFirestore(
       handleFirestoreError(error, OperationType.LIST, 'catalogs');
     }
   );
+}
+
+export async function adminCreateMerchantAccountInFirestore(
+  fbUser: User,
+  input: {
+    ownerUid: string;
+    ownerEmail: string;
+    ownerName: string;
+    platformDomain: string;
+  }
+): Promise<AdminUserRecord | null> {
+  if (!isVerifiedAdminFirebaseUser(fbUser)) return null;
+  const sanitized = sanitizeUserProfileForFirestore({
+    uid: input.ownerUid,
+    email: input.ownerEmail,
+    name: input.ownerName,
+    platformDomain: input.platformDomain || DEFAULT_DOMAIN_BASE,
+  });
+  const path = `users/${sanitized.uid}`;
+  const userRef = doc(db, 'users', sanitized.uid);
+
+  try {
+    const existing = await getDoc(userRef);
+    if (!existing.exists()) {
+      await setDoc(userRef, {
+        ...sanitized,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return {
+      ...sanitized,
+      createdAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 }
 
 export async function adminSaveCatalogInFirestore(

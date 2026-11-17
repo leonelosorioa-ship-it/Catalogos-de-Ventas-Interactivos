@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import {
+  adminCreateMerchantAccountInFirestore,
   adminDeleteCatalogInFirestore,
   adminSaveCatalogInFirestore,
   ensureUserProfileInFirestore,
@@ -10,11 +11,13 @@ import {
   subscribeAllCatalogsAdminInFirestore,
   subscribeUserCatalogsInFirestore,
   syncCatalogsToFirestore,
+  updatePlatformDomainInFirestore,
   type AdminCatalogWorkspace,
   type AdminUserRecord,
 } from './lib/firestoreSync';
 import { AuthLoginView } from './components/AuthLoginView';
 import { CatalogView } from './components/CatalogView';
+import type { CreateCatalogInput } from './components/CreateCatalogModal';
 import { DashboardView } from './components/DashboardView';
 import { LandingView } from './components/LandingView';
 import {
@@ -685,18 +688,117 @@ export default function App() {
     }
   };
 
-  const handleCreateCatalog = (input: {
-    nombre: string;
-    subdominio: string;
-    dominioBase: string;
-    whatsapp: string;
-    tema: StoreTheme;
-    descripcion: string;
-  }) => {
+  const handleCreateCatalog = (input: CreateCatalogInput) => {
     lastLocalEditAtRef.current = Date.now();
     setRouteSlug(null);
-    const owner = currentUser?.email || DEFAULT_DEMO_USER.email;
     const collisionPool = isAdmin ? [...catalogs, ...adminCatalogs] : catalogs;
+    const requestedOwnerEmail = input.ownerEmail?.trim().toLowerCase();
+    const isCreatingForClient =
+      isAdmin &&
+      Boolean(requestedOwnerEmail) &&
+      requestedOwnerEmail !== PLATFORM_ADMIN_EMAIL;
+
+    if (isCreatingForClient && requestedOwnerEmail) {
+      const targetName = input.ownerName?.trim() || input.nombre.trim();
+      const existingMatch = adminUsers.find(
+        (u) => u.email.trim().toLowerCase() === requestedOwnerEmail
+      );
+      const slugSeed = requestedOwnerEmail
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 44);
+      const targetUid =
+        input.ownerUid ||
+        existingMatch?.uid ||
+        `acct-${slugSeed || 'store'}-${Date.now().toString(36).slice(-4)}`;
+
+      const created = createCatalogWorkspace(requestedOwnerEmail, input, collisionPool);
+      const adminEntry: AdminCatalogWorkspace = {
+        ...created,
+        ownerUid: targetUid,
+      };
+      setAdminCatalogs((prev) => [adminEntry, ...prev.filter((c) => c.id !== created.id)]);
+
+      if (!existingMatch) {
+        setAdminUsers((prev) => [
+          {
+            uid: targetUid,
+            email: requestedOwnerEmail,
+            name: targetName,
+            platformDomain: created.config.dominioBase || platformDomain,
+            createdAt: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
+      }
+
+      if (input.localPassword && input.localPassword.trim().length >= 6) {
+        const localPass = input.localPassword.trim();
+        setUsers((prev) => {
+          const exists = prev.some(
+            (u) => u.email.trim().toLowerCase() === requestedOwnerEmail
+          );
+          if (exists) {
+            return prev.map((u) =>
+              u.email.trim().toLowerCase() === requestedOwnerEmail
+                ? { ...u, name: targetName, password: localPass }
+                : u
+            );
+          }
+          return [
+            {
+              id: targetUid,
+              name: targetName,
+              email: requestedOwnerEmail,
+              password: localPass,
+              createdAt: new Date().toISOString(),
+              role: 'merchant',
+              authProvider: 'local',
+              emailVerified: false,
+            },
+            ...prev,
+          ];
+        });
+      }
+
+      fetch('/api/public/catalogs/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ catalogs: [created] }),
+      }).catch(() => {});
+
+      if (firebaseUser && firebaseUser.emailVerified) {
+        void adminCreateMerchantAccountInFirestore(firebaseUser, {
+          ownerUid: targetUid,
+          ownerEmail: requestedOwnerEmail,
+          ownerName: targetName,
+          platformDomain: created.config.dominioBase || platformDomain,
+        })
+          .then(() => adminSaveCatalogInFirestore(firebaseUser, adminEntry))
+          .catch((err) => {
+            if (err instanceof Error) setFatalFirestoreError(err);
+          });
+      }
+
+      if (firebaseIdToken) {
+        fetch('/api/admin/accounts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${firebaseIdToken}`,
+          },
+          body: JSON.stringify({
+            ownerEmail: requestedOwnerEmail,
+            ownerName: targetName,
+            platformDomain: created.config.dominioBase || platformDomain,
+            catalog: adminEntry,
+          }),
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    const owner = currentUser?.email || DEFAULT_DEMO_USER.email;
     const created = createCatalogWorkspace(owner, input, collisionPool);
     setCatalogs((prev) => [created, ...prev]);
     setActiveCatalogId(created.id);
@@ -718,6 +820,42 @@ export default function App() {
           body: JSON.stringify({ catalog: adminEntry }),
         }).catch(() => {});
       }
+    }
+  };
+
+  const handleSavePlatformDomain = (rawDomain: string, applyToAllOwn: boolean) => {
+    const saved = savePlatformDomainBase(rawDomain);
+    if (!saved.valid) return;
+    const nextDomain = saved.normalized;
+    lastLocalEditAtRef.current = Date.now();
+    setPlatformDomain(nextDomain);
+
+    if (firebaseUser && firebaseUser.emailVerified) {
+      void updatePlatformDomainInFirestore(firebaseUser, nextDomain).catch((err) => {
+        if (err instanceof Error) setFatalFirestoreError(err);
+      });
+    }
+
+    if (applyToAllOwn) {
+      setCatalogs((prev) =>
+        prev.map((c) => ({
+          ...c,
+          config: {
+            ...c.config,
+            dominioBase: nextDomain,
+          },
+          updatedAt: new Date().toISOString(),
+        }))
+      );
+    } else if (firebaseIdToken) {
+      fetch('/api/catalogs', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${firebaseIdToken}`,
+        },
+        body: JSON.stringify({ catalogs, platformDomain: nextDomain }),
+      }).catch(() => {});
     }
   };
 
@@ -1008,6 +1146,7 @@ export default function App() {
           onCreateCatalog={handleCreateCatalog}
           onDeleteCatalog={handleDeleteCatalog}
           onAdminDeleteCatalog={handleAdminDeleteCatalog}
+          onSavePlatformDomain={handleSavePlatformDomain}
           onUpdateConfig={handleUpdateConfig}
           onSaveCustomDomain={handleSaveCustomDomain}
           onUpdateProducts={handleUpdateProducts}

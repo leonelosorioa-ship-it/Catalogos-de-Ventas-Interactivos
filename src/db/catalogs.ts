@@ -1,6 +1,6 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db } from './index.ts';
-import { catalogs, products } from './schema.ts';
+import { catalogs, products, users } from './schema.ts';
 import type { CatalogWorkspace, Product, StoreTheme } from '../utils/catalogLogic.ts';
 
 function normalizeSlug(input: string): string {
@@ -212,21 +212,30 @@ export async function replaceUserCatalogs(
   }
 }
 
-export async function getAllCatalogsForAdmin(): Promise<CatalogWorkspace[]> {
+export async function getAllCatalogsForAdmin(): Promise<
+  Array<CatalogWorkspace & { ownerUid: string }>
+> {
   try {
     const rows = await db
-      .select()
+      .select({
+        catalog: catalogs,
+        ownerUid: users.uid,
+      })
       .from(catalogs)
+      .leftJoin(users, eq(catalogs.userId, users.id))
       .orderBy(desc(catalogs.updatedAt));
 
-    const results: CatalogWorkspace[] = [];
-    for (const row of rows) {
+    const results: Array<CatalogWorkspace & { ownerUid: string }> = [];
+    for (const entry of rows) {
       const productRows = await db
         .select()
         .from(products)
-        .where(eq(products.catalogId, row.id))
+        .where(eq(products.catalogId, entry.catalog.id))
         .orderBy(asc(products.sortOrder), asc(products.id));
-      results.push(mapRowsToWorkspace(row, productRows));
+      results.push({
+        ...mapRowsToWorkspace(entry.catalog, productRows),
+        ownerUid: entry.ownerUid || `sql-user-${entry.catalog.userId}`,
+      });
     }
     return results;
   } catch (error) {
